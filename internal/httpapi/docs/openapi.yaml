@@ -1,0 +1,317 @@
+openapi: 3.0.3
+info:
+  title: CPE Info API
+  version: "1.0.0"
+  description: Collects CPE diagnostics over SSH and returns parsed JSON.
+servers:
+  - url: http://localhost:8080
+tags:
+  - name: Health
+  - name: CPE
+paths:
+  /healthz:
+    get:
+      tags: [Health]
+      summary: Liveness probe
+      responses:
+        "200":
+          description: Service is alive
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+  /readyz:
+    get:
+      tags: [Health]
+      summary: Readiness probe
+      responses:
+        "200":
+          description: Service is ready
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ready
+  /v1/cpe/collect:
+    get:
+      tags: [CPE]
+      summary: Collect CPE data using query parameters
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: ip
+          required: true
+          schema:
+            type: string
+            example: 10.13.94.62
+        - in: query
+          name: port
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 65535
+            default: 22
+        - in: query
+          name: model
+          required: false
+          schema:
+            type: string
+            description: "Examples: VANTIVA, FMG, P2812, VMG, EX, AX"
+        - in: query
+          name: raw
+          required: false
+          schema:
+            type: boolean
+            default: false
+        - in: query
+          name: includePsk
+          required: false
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Collection completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CollectResponse"
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Forbidden target IP
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: Concurrency limit reached
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: SSH connection failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CollectResponse"
+    post:
+      tags: [CPE]
+      summary: Collect CPE data using JSON body
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: raw
+          required: false
+          schema:
+            type: boolean
+            default: false
+        - in: query
+          name: includePsk
+          required: false
+          schema:
+            type: boolean
+            default: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CollectRequest"
+            example:
+              ip: 10.13.94.62
+              port: 22
+              model: EX
+      responses:
+        "200":
+          description: Collection completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CollectResponse"
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Forbidden target IP
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: Concurrency limit reached
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: SSH connection failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CollectResponse"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: API Key
+  schemas:
+    CollectRequest:
+      type: object
+      additionalProperties: false
+      required: [ip]
+      properties:
+        ip:
+          type: string
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        model:
+          type: string
+          description: "Examples: VANTIVA, FMG, P2812, VMG, EX, AX"
+    CollectResponse:
+      type: object
+      properties:
+        ip:
+          type: string
+        port:
+          type: integer
+        model:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        sshFailed:
+          type: boolean
+        errors:
+          type: array
+          items:
+            type: string
+        cpeInfo:
+          type: object
+          additionalProperties:
+            type: string
+        uptime:
+          type: object
+          properties:
+            raw:
+              type: string
+            upText:
+              type: string
+            clockTime:
+              type: string
+            loadAvg:
+              type: array
+              items:
+                type: number
+        loadAvg:
+          type: object
+          properties:
+            raw:
+              type: string
+            load:
+              type: array
+              items:
+                type: number
+            procs:
+              type: string
+            lastPid:
+              type: integer
+        interfaces:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        lanHosts:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        portMap:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        arp:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        dhcpLeases:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        ethPorts:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        wifi24Assoc:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        wifi50Assoc:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        wlanConfig:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        sfp:
+          type: object
+          additionalProperties: true
+        raw:
+          type: object
+          additionalProperties:
+            type: string
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              example: bad_request
+            message:
+              type: string
+              example: invalid model

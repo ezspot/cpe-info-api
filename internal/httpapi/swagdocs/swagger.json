@@ -1,0 +1,678 @@
+{
+    "schemes": [
+        "http",
+        "https"
+    ],
+    "swagger": "2.0",
+    "info": {
+        "description": "Collect CPE diagnostics over SSH with model-aware authentication.",
+        "title": "CPE Info API",
+        "contact": {},
+        "version": "1.0"
+    },
+    "basePath": "/",
+    "paths": {
+        "/healthz": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Health"
+                ],
+                "summary": "Liveness probe",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/readyz": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Health"
+                ],
+                "summary": "Readiness probe",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/cpe/collect": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Supports GET query params and POST JSON body.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "CPE"
+                ],
+                "summary": "Collect CPE diagnostics",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Target CPE IP (GET)",
+                        "name": "ip",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Target SSH port (GET, default 22)",
+                        "name": "port",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Model (VANTIVA/FMG/P2812/VMG/AX/EX)",
+                        "name": "model",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Include raw command output",
+                        "name": "raw",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Include cleartext PSK values",
+                        "name": "includePsk",
+                        "in": "query"
+                    },
+                    {
+                        "description": "Target CPE data (POST)",
+                        "name": "payload",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.CollectRequestBody"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/cpe.CollectResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.apiErrorEnvelope"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.apiErrorEnvelope"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.apiErrorEnvelope"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.apiErrorEnvelope"
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/cpe.CollectResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Supports GET query params and POST JSON body.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "CPE"
+                ],
+                "summary": "Collect CPE diagnostics",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Target CPE IP (GET)",
+                        "name": "ip",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Target SSH port (GET, default 22)",
+                        "name": "port",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Model (VANTIVA/FMG/P2812/VMG/AX/EX)",
+                        "name": "model",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Include raw command output",
+                        "name": "raw",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Include cleartext PSK values",
+                        "name": "includePsk",
+                        "in": "query"
+                    },
+                    {
+                        "description": "Target CPE data (POST)",
+                        "name": "payload",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.CollectRequestBody"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/cpe.CollectResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.apiErrorEnvelope"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.apiErrorEnvelope"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.apiErrorEnvelope"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/httpapi.apiErrorEnvelope"
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/cpe.CollectResponse"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "cpe.ArpEntry": {
+            "type": "object",
+            "properties": {
+                "host": {
+                    "type": "string"
+                },
+                "iface": {
+                    "type": "string"
+                },
+                "ipv4": {
+                    "type": "string"
+                },
+                "mac": {
+                    "type": "string"
+                },
+                "state": {
+                    "type": "string"
+                }
+            }
+        },
+        "cpe.CollectResponse": {
+            "type": "object",
+            "properties": {
+                "arp": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cpe.ArpEntry"
+                    }
+                },
+                "cpeInfo": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "dhcpLeases": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cpe.DhcpLease"
+                    }
+                },
+                "errors": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "ethPorts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cpe.EthPort"
+                    }
+                },
+                "interfaces": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cpe.Iface"
+                    }
+                },
+                "ip": {
+                    "type": "string"
+                },
+                "lanHosts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cpe.LanHost"
+                    }
+                },
+                "loadAvg": {
+                    "$ref": "#/definitions/cpe.ProcLoadAvg"
+                },
+                "model": {
+                    "type": "string"
+                },
+                "port": {
+                    "type": "integer"
+                },
+                "portMap": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cpe.PortMapEntry"
+                    }
+                },
+                "raw": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "sfp": {
+                    "$ref": "#/definitions/cpe.SfpInfo"
+                },
+                "sshFailed": {
+                    "type": "boolean"
+                },
+                "timestamp": {
+                    "type": "string"
+                },
+                "uptime": {
+                    "$ref": "#/definitions/cpe.UptimeInfo"
+                },
+                "wifi24Assoc": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cpe.WifiAssoc"
+                    }
+                },
+                "wifi50Assoc": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cpe.WifiAssoc"
+                    }
+                },
+                "wlanConfig": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/cpe.WlanRow"
+                    }
+                }
+            }
+        },
+        "cpe.DhcpLease": {
+            "type": "object",
+            "properties": {
+                "expirySeconds": {
+                    "type": "integer"
+                },
+                "hostname": {
+                    "type": "string"
+                },
+                "ipv4": {
+                    "type": "string"
+                },
+                "mac": {
+                    "type": "string"
+                }
+            }
+        },
+        "cpe.EthPort": {
+            "type": "object",
+            "properties": {
+                "duplex": {
+                    "type": "string"
+                },
+                "enable": {
+                    "type": "integer"
+                },
+                "interface": {
+                    "type": "string"
+                },
+                "raw": {
+                    "type": "string"
+                },
+                "speed": {
+                    "type": "integer"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "cpe.Iface": {
+            "type": "object",
+            "properties": {
+                "broadcast": {
+                    "type": "string"
+                },
+                "hwaddr": {
+                    "type": "string"
+                },
+                "ipv4": {
+                    "type": "string"
+                },
+                "ipv6LinkLocal": {
+                    "type": "string"
+                },
+                "mtu": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "netmask": {
+                    "type": "string"
+                },
+                "rxBytes": {
+                    "type": "integer"
+                },
+                "rxDropped": {
+                    "type": "integer"
+                },
+                "rxErrors": {
+                    "type": "integer"
+                },
+                "rxPackets": {
+                    "type": "integer"
+                },
+                "txBytes": {
+                    "type": "integer"
+                },
+                "txDropped": {
+                    "type": "integer"
+                },
+                "txErrors": {
+                    "type": "integer"
+                },
+                "txPackets": {
+                    "type": "integer"
+                }
+            }
+        },
+        "cpe.LanHost": {
+            "type": "object",
+            "properties": {
+                "addressSource": {
+                    "type": "string"
+                },
+                "connectionType": {
+                    "type": "string"
+                },
+                "ipv4": {
+                    "type": "string"
+                },
+                "ipv6": {
+                    "type": "string"
+                },
+                "mac": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "cpe.PortMapEntry": {
+            "type": "object",
+            "properties": {
+                "macNoColons": {
+                    "type": "string"
+                },
+                "portCodeHex": {
+                    "type": "string"
+                }
+            }
+        },
+        "cpe.ProcLoadAvg": {
+            "type": "object",
+            "properties": {
+                "lastPid": {
+                    "type": "integer"
+                },
+                "load": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "procs": {
+                    "type": "string"
+                },
+                "raw": {
+                    "type": "string"
+                }
+            }
+        },
+        "cpe.SfpInfo": {
+            "type": "object",
+            "properties": {
+                "duplex": {
+                    "type": "string"
+                },
+                "linkState": {
+                    "type": "string"
+                },
+                "partNumber": {
+                    "type": "string"
+                },
+                "present": {
+                    "type": "boolean"
+                },
+                "raw": {
+                    "type": "string"
+                },
+                "rxPowerDbm": {
+                    "type": "number"
+                },
+                "serialNumber": {
+                    "type": "string"
+                },
+                "speedMbit": {
+                    "type": "integer"
+                },
+                "temperatureC": {
+                    "type": "number"
+                },
+                "txPowerDbm": {
+                    "type": "number"
+                },
+                "vendorName": {
+                    "type": "string"
+                }
+            }
+        },
+        "cpe.UptimeInfo": {
+            "type": "object",
+            "properties": {
+                "clockTime": {
+                    "type": "string"
+                },
+                "loadAvg": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "raw": {
+                    "type": "string"
+                },
+                "upText": {
+                    "type": "string"
+                }
+            }
+        },
+        "cpe.WifiAssoc": {
+            "type": "object",
+            "properties": {
+                "address": {
+                    "type": "string"
+                },
+                "level": {
+                    "type": "integer"
+                },
+                "rateKbps": {
+                    "type": "integer"
+                },
+                "rssi": {
+                    "type": "integer"
+                },
+                "snr": {
+                    "type": "integer"
+                }
+            }
+        },
+        "cpe.WlanRow": {
+            "type": "object",
+            "properties": {
+                "band": {
+                    "type": "string"
+                },
+                "bandwidth": {
+                    "type": "string"
+                },
+                "channel": {
+                    "type": "string"
+                },
+                "enable": {
+                    "type": "integer"
+                },
+                "index": {
+                    "type": "integer"
+                },
+                "maxDevices": {
+                    "type": "integer"
+                },
+                "pmf": {
+                    "type": "string"
+                },
+                "pskValue": {
+                    "type": "string"
+                },
+                "raw": {
+                    "type": "string"
+                },
+                "securityMode": {
+                    "type": "string"
+                },
+                "ssid": {
+                    "type": "string"
+                }
+            }
+        },
+        "httpapi.CollectRequestBody": {
+            "type": "object",
+            "properties": {
+                "ip": {
+                    "type": "string"
+                },
+                "model": {
+                    "type": "string"
+                },
+                "port": {
+                    "type": "integer"
+                }
+            }
+        },
+        "httpapi.apiError": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                }
+            }
+        },
+        "httpapi.apiErrorEnvelope": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "$ref": "#/definitions/httpapi.apiError"
+                }
+            }
+        }
+    },
+    "securityDefinitions": {
+        "BearerAuth": {
+            "description": "Use `Bearer \u003ctoken\u003e`.",
+            "type": "apiKey",
+            "name": "Authorization",
+            "in": "header"
+        }
+    }
+}
