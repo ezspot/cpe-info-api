@@ -166,6 +166,10 @@ Invoke-RestMethod `
 - Command errors like `Process exited with status 127` mean that command is missing on that firmware/profile. The API now logs command key, duration, and output sample so you can identify which parsers are not applicable.
 - Use `raw=1` while validating new firmware variants to see exact command output.
 - If commands differ significantly between vendors/firmware, add model-specific command sets in `internal/cpe/collector.go`.
+- `ssh dial` errors are classified with hints in response/logs:
+  - `connection refused` / `actively refused`: target port is closed or SSH is disabled on that interface.
+  - `timed out`: network path/firewall issue.
+  - `unable to authenticate`: credentials/key/passphrase mismatch.
 
 ## Notes
 

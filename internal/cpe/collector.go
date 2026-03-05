@@ -167,14 +167,20 @@ func (c *Collector) Collect(ctx context.Context, ip string, port int, options Co
 
 	client, err := c.sshDial(ctx, ip, port, options.Model)
 	if err != nil {
+		hint := classifySSHDialError(err)
+		errorText := "ssh dial: " + err.Error()
+		if hint != "" {
+			errorText += " (" + hint + ")"
+		}
 		c.log.Error("collect_ssh_dial_failed",
 			"ip", ip,
 			"port", port,
 			"model", options.Model,
 			"error", err.Error(),
+			"hint", hint,
 		)
 		response.SSHFailed = true
-		response.Errors = append(response.Errors, "ssh dial: "+err.Error())
+		response.Errors = append(response.Errors, errorText)
 		return response
 	}
 	defer client.Close()
@@ -857,6 +863,22 @@ func minDuration(a, b time.Duration) time.Duration {
 
 func errorsIsTimeout(err error) bool {
 	return errors.Is(err, context.DeadlineExceeded)
+}
+
+func classifySSHDialError(err error) string {
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "connection refused"), strings.Contains(msg, "actively refused"):
+		return "ssh port is closed/refused; verify SSH is enabled on the CPE and the target port is correct"
+	case strings.Contains(msg, "i/o timeout"), strings.Contains(msg, "timed out"):
+		return "tcp connect timed out; verify routing/firewall and target reachability"
+	case strings.Contains(msg, "no route to host"), strings.Contains(msg, "host is unreachable"):
+		return "target unreachable; verify network path and CPE IP"
+	case strings.Contains(msg, "unable to authenticate"), strings.Contains(msg, "permission denied"):
+		return "authentication failed; verify model credentials and key/passphrase settings"
+	default:
+		return ""
+	}
 }
 
 func trimEchoLines(lines []string, command, marker string) []string {
