@@ -1,6 +1,8 @@
 package cpe
 
 import (
+	"encoding/json"
+	"fmt"
 	"net"
 	"strconv"
 	"strings"
@@ -456,6 +458,40 @@ func parseSfp(s string) *SfpInfo {
 	return out
 }
 
+func parseUbusSystemInfo(s string) (map[string]string, *UptimeInfo) {
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(s), &payload); err != nil {
+		return nil, nil
+	}
+
+	out := make(map[string]string, 8)
+	copyJSONField(out, payload, "Hostname", "hostname")
+	copyJSONField(out, payload, "Model", "model")
+	copyJSONField(out, payload, "Kernel", "kernel")
+	copyJSONField(out, payload, "System", "system")
+	copyJSONField(out, payload, "BoardName", "board_name")
+
+	if release, ok := payload["release"].(map[string]any); ok {
+		copyJSONField(out, release, "ReleaseDistribution", "distribution")
+		copyJSONField(out, release, "ReleaseVersion", "version")
+		copyJSONField(out, release, "ReleaseRevision", "revision")
+		copyJSONField(out, release, "ReleaseDescription", "description")
+	}
+	if len(out) == 0 {
+		out = nil
+	}
+
+	uptimeSeconds, ok := toFloat64(payload["uptime"])
+	if !ok {
+		return out, nil
+	}
+	uptime := &UptimeInfo{
+		Raw:    fmt.Sprintf("%.0f", uptimeSeconds),
+		UpText: fmt.Sprintf("%.0fs", uptimeSeconds),
+	}
+	return out, uptime
+}
+
 func firstNonEmptyLine(s string) string {
 	for _, line := range strings.Split(s, "\n") {
 		line = strings.TrimSpace(line)
@@ -516,6 +552,41 @@ func firstFieldAfter(line, key string) string {
 		return ""
 	}
 	return fields[0]
+}
+
+func copyJSONField(dst map[string]string, src map[string]any, dstKey, srcKey string) {
+	v, ok := src[srcKey]
+	if !ok {
+		return
+	}
+	switch t := v.(type) {
+	case string:
+		t = strings.TrimSpace(t)
+		if t != "" {
+			dst[dstKey] = t
+		}
+	case float64:
+		dst[dstKey] = fmt.Sprintf("%v", t)
+	case bool:
+		if t {
+			dst[dstKey] = "true"
+		} else {
+			dst[dstKey] = "false"
+		}
+	}
+}
+
+func toFloat64(v any) (float64, bool) {
+	switch t := v.(type) {
+	case float64:
+		return t, true
+	case int:
+		return float64(t), true
+	case int64:
+		return float64(t), true
+	default:
+		return 0, false
+	}
 }
 
 func afterInt(line, key string) int {

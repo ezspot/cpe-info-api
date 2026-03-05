@@ -2,6 +2,8 @@
 
 Production-oriented Go 1.24+ service that collects CPE diagnostics over SSH.
 
+Canonical model command documentation is maintained in [docs/device-command-matrix.md](docs/device-command-matrix.md).
+
 ## Endpoints
 
 - `GET /healthz`
@@ -35,6 +37,14 @@ Production-oriented Go 1.24+ service that collects CPE diagnostics over SSH.
     - `VMG` / `AX` / `EX` -> `VMG8825-EX-AX_TAFJORD`
 - Other models:
   - fallback to generic settings (`CPE_SSH_USER`, `CPE_SSH_PASS`, `CPE_SSH_KEY_PATH`, optional `CPE_SSH_MODEL_KEY_MAP`)
+
+## Model command profiles
+
+- `model=VANTIVA` uses the OpenWRT poll profile (`ubus`/`uci`) and parses `ubus call system info` into `cpeInfo`/`uptime` when possible.
+- `model=AX*` uses ZyXEL poll profile without `zycli sfp show`.
+- `model=VMG*`, `EX*`, `P2812*`, `FMG*` use ZyXEL poll profile with SFP command.
+- Unknown model values use the ZyXEL-compatible default profile.
+- Evidence and confirmation state per model is tracked in `docs/device-command-matrix.md`.
 
 ## Security defaults
 
@@ -160,3 +170,4 @@ Invoke-RestMethod `
 ## Notes
 
 - The `portmap` command includes `dmesg -c`, which clears the kernel ring buffer on the CPE.
+- Reboot/reset/TR-069 command mappings are documented in `docs/device-command-matrix.md` for operational parity, but this API currently exposes collection endpoints only.

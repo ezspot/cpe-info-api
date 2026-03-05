@@ -38,6 +38,12 @@ type commandSpec struct {
 	cmd string
 }
 
+type commandProfile struct {
+	name        string
+	commands    []commandSpec
+	cfgPrecheck bool
+}
+
 type interactiveShell struct {
 	session *ssh.Session
 	stdin   io.WriteCloser
@@ -61,7 +67,7 @@ const (
 		"if [ -d \"$d\" ]; then case \":$LD_LIBRARY_PATH:\" in *\":$d:\"*) ;; *) LD_LIBRARY_PATH=\"${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$d\";; esac; fi; done; export LD_LIBRARY_PATH"
 )
 
-var defaultCommands = []commandSpec{
+var zyxelCommandsWithSFP = []commandSpec{
 	{key: "sys_atsh", cmd: "sys atsh"},
 	{key: "uptime", cmd: "uptime"},
 	{key: "ifconfig", cmd: "ifconfig"},
@@ -75,6 +81,29 @@ var defaultCommands = []commandSpec{
 	{key: "wlan", cmd: "cfg wlan get"},
 	{key: "loadavg", cmd: "cat /proc/loadavg"},
 	{key: "sfp", cmd: "zycli sfp show"},
+}
+
+var zyxelCommandsNoSFP = []commandSpec{
+	{key: "sys_atsh", cmd: "sys atsh"},
+	{key: "uptime", cmd: "uptime"},
+	{key: "ifconfig", cmd: "ifconfig"},
+	{key: "lanhosts", cmd: "cfg lanhosts get"},
+	{key: "portmap", cmd: "if cfg lanhosts get >/dev/null 2>&1; then dmesg -c > /dev/null 2>&1; ethswctl -c arldump > /dev/null 2>&1; for line in $(cfg lanhosts get | grep Ethernet | awk '{print $4}' | sed 's/\\://g'); do dmesg | grep \"$line\" | awk '{print $3 \" \" $4}'; done; fi"},
+	{key: "arp", cmd: "arp -a | grep br0"},
+	{key: "leases", cmd: "cat /var/dnsmasq/dnsmasq.leases"},
+	{key: "ethctl", cmd: "cfg ethctl get"},
+	{key: "wifi24", cmd: "zywlctl -b 2 assoclist"},
+	{key: "wifi50", cmd: "zywlctl -b 5 assoclist"},
+	{key: "wlan", cmd: "cfg wlan get"},
+	{key: "loadavg", cmd: "cat /proc/loadavg"},
+}
+
+var vantivaCommands = []commandSpec{
+	{key: "system_info", cmd: "ubus call system info"},
+	{key: "env", cmd: "uci show env"},
+	{key: "network_device_status", cmd: "ubus call network.device status"},
+	{key: "hostmanager_devices", cmd: "ubus call hostmanager.device get"},
+	{key: "gpon_info", cmd: "ubus call gpon.trsv get_info"},
 }
 
 func NewCollector(cfg config.Config, logger *slog.Logger) (*Collector, error) {
@@ -170,14 +199,25 @@ func (c *Collector) Collect(ctx context.Context, ip string, port int, options Co
 	}
 	defer shell.Close()
 
-	cfgAvailable := c.isCfgAvailable(ctx, shell, ip, options.Model)
-	if !cfgAvailable {
-		response.Errors = append(response.Errors, "cfg utility unavailable on this device/firmware; skipped lanhosts/portmap/ethctl/wlan")
+	profile := commandProfileForModel(options.Model)
+	c.log.Info("collect_command_profile_selected",
+		"ip", ip,
+		"model", options.Model,
+		"profile", profile.name,
+		"command_count", len(profile.commands),
+	)
+
+	cfgAvailable := true
+	if profile.cfgPrecheck {
+		cfgAvailable = c.isCfgAvailable(ctx, shell, ip, options.Model)
+		if !cfgAvailable {
+			response.Errors = append(response.Errors, "cfg utility unavailable on this device/firmware; skipped lanhosts/portmap/ethctl/wlan")
+		}
 	}
 
-	rawOutput := make(map[string]string, len(defaultCommands))
-	for _, command := range defaultCommands {
-		if !cfgAvailable && isCfgDependentCommand(command.key) {
+	rawOutput := make(map[string]string, len(profile.commands))
+	for _, command := range profile.commands {
+		if profile.cfgPrecheck && !cfgAvailable && isCfgDependentCommand(command.key) {
 			c.log.Info("collect_command_skipped",
 				"ip", ip,
 				"model", options.Model,
@@ -284,6 +324,20 @@ func (c *Collector) populateParsedFields(out *CollectResponse, raw map[string]st
 	}
 	if s := raw["sfp"]; s != "" {
 		out.Sfp = parseSfp(s)
+	}
+	if s := raw["system_info"]; s != "" {
+		systemInfo, uptime := parseUbusSystemInfo(s)
+		if len(systemInfo) > 0 {
+			if out.CpeInfo == nil {
+				out.CpeInfo = make(map[string]string, len(systemInfo))
+			}
+			for k, v := range systemInfo {
+				out.CpeInfo[k] = v
+			}
+		}
+		if out.Uptime == nil && uptime != nil {
+			out.Uptime = uptime
+		}
 	}
 }
 
@@ -519,6 +573,30 @@ func zyxelKeyForModel(model string) (string, bool) {
 		return keyFileVMG, true
 	default:
 		return "", false
+	}
+}
+
+func commandProfileForModel(model string) commandProfile {
+	upper := strings.ToUpper(strings.TrimSpace(model))
+	switch {
+	case isVantivaModel(upper):
+		return commandProfile{
+			name:        "vantiva-openwrt-v1",
+			commands:    vantivaCommands,
+			cfgPrecheck: false,
+		}
+	case strings.Contains(upper, "AX"):
+		return commandProfile{
+			name:        "zyxel-ax-v1",
+			commands:    zyxelCommandsNoSFP,
+			cfgPrecheck: true,
+		}
+	default:
+		return commandProfile{
+			name:        "zyxel-v1",
+			commands:    zyxelCommandsWithSFP,
+			cfgPrecheck: true,
+		}
 	}
 }
 
