@@ -5,12 +5,16 @@ info:
   description: Collects CPE diagnostics over SSH and returns parsed JSON.
 servers:
   - url: http://localhost:8080
+security:
+  - bearerAuth: []
 tags:
   - name: Health
   - name: CPE
+  - name: Observability
 paths:
   /healthz:
     get:
+      operationId: getHealthz
       tags: [Health]
       summary: Liveness probe
       responses:
@@ -19,13 +23,12 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    example: ok
+                $ref: "#/components/schemas/StatusResponse"
+              example:
+                status: ok
   /readyz:
     get:
+      operationId: getReadyz
       tags: [Health]
       summary: Readiness probe
       responses:
@@ -34,17 +37,28 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    example: ready
+                $ref: "#/components/schemas/StatusResponse"
+              example:
+                status: ready
+  /metrics:
+    get:
+      operationId: getMetrics
+      tags: [Observability]
+      summary: Prometheus metrics scrape endpoint
+      security: []
+      responses:
+        "200":
+          description: Metrics in Prometheus text exposition format
+          content:
+            text/plain:
+              schema:
+                type: string
   /v1/cpe/collect:
     get:
+      operationId: collectCpeGet
       tags: [CPE]
       summary: Collect CPE data using query parameters
-      security:
-        - bearerAuth: []
+      description: OpenWRT models are VANTIVA family variants such as F01 and F1X. ZyXEL models include VMG8825 or VMG, EX5401, EX5601, AX7501 or AX, FMG, and EMG-P2812 or EMG.
       parameters:
         - in: query
           name: ip
@@ -65,7 +79,9 @@ paths:
           required: false
           schema:
             type: string
-            description: "Examples: VANTIVA, FMG, P2812, VMG, EX, AX"
+            pattern: ^[A-Za-z0-9._-]+$
+            description: VANTIVA family uses the OpenWRT profile, including F01 and F1X. ZyXEL aliases include VMG8825 or VMG, EX5401, EX5601, AX7501 or AX, FMG, and EMG-P2812 or EMG.
+            example: EX5401
         - in: query
           name: raw
           required: false
@@ -85,30 +101,27 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CollectResponse"
+              example:
+                ip: 10.13.94.62
+                port: 22
+                model: EX5401
+                timestamp: "2026-03-06T00:00:00Z"
+                sshFailed: false
+                cpeInfo:
+                  Model: EX5401
+                  Firmware: V5.70
         "400":
-          description: Invalid input
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+          $ref: "#/components/responses/BadRequest"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
         "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+          $ref: "#/components/responses/Unauthorized"
         "403":
-          description: Forbidden target IP
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+          $ref: "#/components/responses/Forbidden"
         "429":
-          description: Concurrency limit reached
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+          $ref: "#/components/responses/TooManyRequests"
         "502":
           description: SSH connection failed
           content:
@@ -116,10 +129,10 @@ paths:
               schema:
                 $ref: "#/components/schemas/CollectResponse"
     post:
+      operationId: collectCpePost
       tags: [CPE]
       summary: Collect CPE data using JSON body
-      security:
-        - bearerAuth: []
+      description: OpenWRT models are VANTIVA family variants such as F01 and F1X. ZyXEL models include VMG8825 or VMG, EX5401, EX5601, AX7501 or AX, FMG, and EMG-P2812 or EMG.
       parameters:
         - in: query
           name: raw
@@ -142,7 +155,7 @@ paths:
             example:
               ip: 10.13.94.62
               port: 22
-              model: EX
+              model: EMG-P2812
       responses:
         "200":
           description: Collection completed
@@ -150,30 +163,27 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CollectResponse"
+              example:
+                ip: 10.13.94.62
+                port: 22
+                model: F01
+                timestamp: "2026-03-06T00:00:00Z"
+                sshFailed: false
+                cpeInfo:
+                  Hostname: vantiva-cpe
+                  Model: FGA2235TCS
         "400":
-          description: Invalid input
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+          $ref: "#/components/responses/BadRequest"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
         "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+          $ref: "#/components/responses/Unauthorized"
         "403":
-          description: Forbidden target IP
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+          $ref: "#/components/responses/Forbidden"
         "429":
-          description: Concurrency limit reached
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+          $ref: "#/components/responses/TooManyRequests"
         "502":
           description: SSH connection failed
           content:
@@ -186,7 +196,95 @@ components:
       type: http
       scheme: bearer
       bearerFormat: API Key
+  responses:
+    BadRequest:
+      description: Invalid input
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: bad_request
+              message: invalid model
+              status: 400
+              requestId: 9ad72bb676f0460d8d9cb7f66d9a4f43
+              retryable: false
+              details:
+                field: model
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: unauthorized
+              message: missing bearer token
+              status: 401
+              requestId: 9ad72bb676f0460d8d9cb7f66d9a4f43
+              retryable: false
+    Forbidden:
+      description: Forbidden target IP
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: forbidden
+              message: target ip not allowed
+              status: 403
+              requestId: 9ad72bb676f0460d8d9cb7f66d9a4f43
+              retryable: false
+    MethodNotAllowed:
+      description: Method not allowed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: method_not_allowed
+              message: use GET or POST
+              status: 405
+              requestId: 9ad72bb676f0460d8d9cb7f66d9a4f43
+              retryable: false
+    RequestEntityTooLarge:
+      description: Request body too large
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: request_body_too_large
+              message: request body too large
+              status: 413
+              requestId: 9ad72bb676f0460d8d9cb7f66d9a4f43
+              retryable: false
+    TooManyRequests:
+      description: Concurrency limit reached
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: too_many_requests
+              message: server is at max concurrency
+              status: 429
+              requestId: 9ad72bb676f0460d8d9cb7f66d9a4f43
+              retryable: true
   schemas:
+    StatusResponse:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
     CollectRequest:
       type: object
       additionalProperties: false
@@ -194,15 +292,20 @@ components:
       properties:
         ip:
           type: string
+          example: 10.13.94.62
         port:
           type: integer
           minimum: 1
           maximum: 65535
+          default: 22
         model:
           type: string
-          description: "Examples: VANTIVA, FMG, P2812, VMG, EX, AX"
+          pattern: ^[A-Za-z0-9._-]+$
+          description: VANTIVA family uses the OpenWRT profile, including F01 and F1X. ZyXEL aliases include VMG8825 or VMG, EX5401, EX5601, AX7501 or AX, FMG, and EMG-P2812 or EMG.
+          example: VMG8825
     CollectResponse:
       type: object
+      additionalProperties: false
       properties:
         ip:
           type: string
@@ -252,66 +355,279 @@ components:
         interfaces:
           type: array
           items:
-            type: object
-            additionalProperties: true
+            $ref: "#/components/schemas/Iface"
         lanHosts:
           type: array
           items:
-            type: object
-            additionalProperties: true
+            $ref: "#/components/schemas/LanHost"
         portMap:
           type: array
           items:
-            type: object
-            additionalProperties: true
+            $ref: "#/components/schemas/PortMapEntry"
         arp:
           type: array
           items:
-            type: object
-            additionalProperties: true
+            $ref: "#/components/schemas/ArpEntry"
         dhcpLeases:
           type: array
           items:
-            type: object
-            additionalProperties: true
+            $ref: "#/components/schemas/DhcpLease"
         ethPorts:
           type: array
           items:
-            type: object
-            additionalProperties: true
+            $ref: "#/components/schemas/EthPort"
         wifi24Assoc:
           type: array
           items:
-            type: object
-            additionalProperties: true
+            $ref: "#/components/schemas/WifiAssoc"
         wifi50Assoc:
           type: array
           items:
-            type: object
-            additionalProperties: true
+            $ref: "#/components/schemas/WifiAssoc"
         wlanConfig:
           type: array
           items:
-            type: object
-            additionalProperties: true
+            $ref: "#/components/schemas/WlanRow"
         sfp:
-          type: object
-          additionalProperties: true
+          $ref: "#/components/schemas/SfpInfo"
         raw:
           type: object
           additionalProperties:
             type: string
+    UptimeInfo:
+      type: object
+      additionalProperties: false
+      properties:
+        raw:
+          type: string
+        upText:
+          type: string
+        clockTime:
+          type: string
+        loadAvg:
+          type: array
+          minItems: 3
+          maxItems: 3
+          items:
+            type: number
+    ProcLoadAvg:
+      type: object
+      additionalProperties: false
+      properties:
+        raw:
+          type: string
+        load:
+          type: array
+          minItems: 3
+          maxItems: 3
+          items:
+            type: number
+        procs:
+          type: string
+        lastPid:
+          type: integer
+    Iface:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        hwaddr:
+          type: string
+        ipv4:
+          type: string
+        netmask:
+          type: string
+        broadcast:
+          type: string
+        ipv6LinkLocal:
+          type: string
+        mtu:
+          type: integer
+        rxPackets:
+          type: integer
+          format: int64
+        txPackets:
+          type: integer
+          format: int64
+        rxBytes:
+          type: integer
+          format: int64
+        txBytes:
+          type: integer
+          format: int64
+        rxErrors:
+          type: integer
+          format: int64
+        txErrors:
+          type: integer
+          format: int64
+        rxDropped:
+          type: integer
+          format: int64
+        txDropped:
+          type: integer
+          format: int64
+    LanHost:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        ipv4:
+          type: string
+        ipv6:
+          type: string
+        mac:
+          type: string
+        addressSource:
+          type: string
+        connectionType:
+          type: string
+    PortMapEntry:
+      type: object
+      additionalProperties: false
+      properties:
+        macNoColons:
+          type: string
+        portCodeHex:
+          type: string
+    ArpEntry:
+      type: object
+      additionalProperties: false
+      properties:
+        host:
+          type: string
+        ipv4:
+          type: string
+        mac:
+          type: string
+        iface:
+          type: string
+        state:
+          type: string
+    DhcpLease:
+      type: object
+      additionalProperties: false
+      properties:
+        expirySeconds:
+          type: integer
+          format: int64
+        mac:
+          type: string
+        ipv4:
+          type: string
+        hostname:
+          type: string
+    EthPort:
+      type: object
+      additionalProperties: false
+      properties:
+        interface:
+          type: string
+        duplex:
+          type: string
+        speed:
+          type: integer
+        enable:
+          type: integer
+        status:
+          type: string
+        raw:
+          type: string
+    WifiAssoc:
+      type: object
+      additionalProperties: false
+      properties:
+        address:
+          type: string
+        rateKbps:
+          type: integer
+        rssi:
+          type: integer
+        snr:
+          type: integer
+        level:
+          type: integer
+    WlanRow:
+      type: object
+      additionalProperties: false
+      properties:
+        index:
+          type: integer
+        band:
+          type: string
+        ssid:
+          type: string
+        enable:
+          type: integer
+        bandwidth:
+          type: string
+        channel:
+          type: string
+        maxDevices:
+          type: integer
+        securityMode:
+          type: string
+        pskValue:
+          type: string
+        pmf:
+          type: string
+        raw:
+          type: string
+    SfpInfo:
+      type: object
+      additionalProperties: false
+      properties:
+        raw:
+          type: string
+        present:
+          type: boolean
+        vendorName:
+          type: string
+        partNumber:
+          type: string
+        serialNumber:
+          type: string
+        rxPowerDbm:
+          type: number
+        txPowerDbm:
+          type: number
+        temperatureC:
+          type: number
+        linkState:
+          type: string
+        duplex:
+          type: string
+        speedMbit:
+          type: integer
     ErrorResponse:
       type: object
+      additionalProperties: false
       required: [error]
       properties:
         error:
+          $ref: "#/components/schemas/ErrorObject"
+    ErrorObject:
+      type: object
+      additionalProperties: false
+      required: [code, message, status, retryable]
+      properties:
+        code:
+          type: string
+          example: bad_request
+        message:
+          type: string
+          example: invalid model
+        status:
+          type: integer
+          example: 400
+        requestId:
+          type: string
+          example: 9ad72bb676f0460d8d9cb7f66d9a4f43
+        retryable:
+          type: boolean
+          example: false
+        details:
           type: object
-          required: [code, message]
-          properties:
-            code:
-              type: string
-              example: bad_request
-            message:
-              type: string
-              example: invalid model
+          additionalProperties: true

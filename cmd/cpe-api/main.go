@@ -13,6 +13,7 @@ import (
 	"cpe-api/internal/config"
 	"cpe-api/internal/cpe"
 	"cpe-api/internal/httpapi"
+	"cpe-api/internal/observability"
 )
 
 func main() {
@@ -33,13 +34,15 @@ func main() {
 		"ssh_keys_dir", cfg.SSHKeysDir,
 	)
 
-	collector, err := cpe.NewCollector(cfg, logger)
+	metrics := observability.NewRegistry()
+
+	collector, err := cpe.NewCollector(cfg, logger, metrics)
 	if err != nil {
 		logger.Error("collector init failed", "error", err)
 		os.Exit(1)
 	}
 
-	handler := httpapi.NewServer(cfg, logger, collector)
+	handler := httpapi.NewServer(cfg, logger, collector, metrics)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,

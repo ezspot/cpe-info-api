@@ -8,5 +8,3 @@
 // @name Authorization
 // @description Use `Bearer <token>`.
 package main
-
-//go:generate go run github.com/swaggo/swag/cmd/swag@v1.16.6 init -g docs.go -d .,../../internal/httpapi,../../internal/cpe -o ../../internal/httpapi/swagdocs --parseInternal

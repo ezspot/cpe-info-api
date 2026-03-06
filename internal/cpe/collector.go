@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"cpe-api/internal/config"
+	"cpe-api/internal/observability"
+
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 )
@@ -24,6 +26,7 @@ import (
 type Collector struct {
 	cfg       config.Config
 	log       *slog.Logger
+	metrics   *observability.Registry
 	hostKeyCB ssh.HostKeyCallback
 
 	signerMu    sync.RWMutex
@@ -106,7 +109,7 @@ var vantivaCommands = []commandSpec{
 	{key: "gpon_info", cmd: "ubus call gpon.trsv get_info"},
 }
 
-func NewCollector(cfg config.Config, logger *slog.Logger) (*Collector, error) {
+func NewCollector(cfg config.Config, logger *slog.Logger, metrics *observability.Registry) (*Collector, error) {
 	var hostKeyCB ssh.HostKeyCallback
 	if cfg.SSHInsecureHostKey {
 		hostKeyCB = ssh.InsecureIgnoreHostKey()
@@ -118,9 +121,14 @@ func NewCollector(cfg config.Config, logger *slog.Logger) (*Collector, error) {
 		hostKeyCB = cb
 	}
 
+	if metrics == nil {
+		metrics = observability.NewRegistry()
+	}
+
 	return &Collector{
 		cfg:         cfg,
 		log:         logger,
+		metrics:     metrics,
 		hostKeyCB:   hostKeyCB,
 		signerCache: make(map[string]ssh.Signer),
 		targetGates: make(map[string]chan struct{}),
@@ -167,11 +175,12 @@ func (c *Collector) Collect(ctx context.Context, ip string, port int, options Co
 
 	client, err := c.sshDial(ctx, ip, port, options.Model)
 	if err != nil {
-		hint := classifySSHDialError(err)
+		reason, hint := classifySSHDialError(err)
 		errorText := "ssh dial: " + err.Error()
 		if hint != "" {
 			errorText += " (" + hint + ")"
 		}
+		c.metrics.ObserveSSHDialFailure(options.Model, reason)
 		c.log.Error("collect_ssh_dial_failed",
 			"ip", ip,
 			"port", port,
@@ -224,6 +233,7 @@ func (c *Collector) Collect(ctx context.Context, ip string, port int, options Co
 	rawOutput := make(map[string]string, len(profile.commands))
 	for _, command := range profile.commands {
 		if profile.cfgPrecheck && !cfgAvailable && isCfgDependentCommand(command.key) {
+			c.metrics.ObserveCommandDuration(profile.name, command.key, "skipped", 0)
 			c.log.Info("collect_command_skipped",
 				"ip", ip,
 				"model", options.Model,
@@ -238,6 +248,7 @@ func (c *Collector) Collect(ctx context.Context, ip string, port int, options Co
 		output, runErr := shell.RunCommand(commandCtx, command.cmd)
 		commandCancel()
 		output = normalizeOutput(output)
+		duration := time.Since(cmdStart)
 
 		if runErr != nil {
 			errMsg := fmt.Sprintf("%s: %v", command.key, runErr)
@@ -245,12 +256,17 @@ func (c *Collector) Collect(ctx context.Context, ip string, port int, options Co
 				errMsg += " (command unavailable on this device/firmware)"
 			}
 			response.Errors = append(response.Errors, errMsg)
+			result := "error"
+			if errorsIsTimeout(runErr) {
+				result = "timeout"
+			}
+			c.metrics.ObserveCommandDuration(profile.name, command.key, result, duration)
 
 			c.log.Warn("collect_command_failed",
 				"ip", ip,
 				"model", options.Model,
 				"key", command.key,
-				"duration_ms", time.Since(cmdStart).Milliseconds(),
+				"duration_ms", duration.Milliseconds(),
 				"error", runErr.Error(),
 				"output_sample", truncateOneLine(output, 180),
 			)
@@ -266,11 +282,12 @@ func (c *Collector) Collect(ctx context.Context, ip string, port int, options Co
 		}
 
 		rawOutput[command.key] = output
+		c.metrics.ObserveCommandDuration(profile.name, command.key, "success", duration)
 		c.log.Debug("collect_command_ok",
 			"ip", ip,
 			"model", options.Model,
 			"key", command.key,
-			"duration_ms", time.Since(cmdStart).Milliseconds(),
+			"duration_ms", duration.Milliseconds(),
 			"output_bytes", len(output),
 		)
 	}
@@ -865,19 +882,19 @@ func errorsIsTimeout(err error) bool {
 	return errors.Is(err, context.DeadlineExceeded)
 }
 
-func classifySSHDialError(err error) string {
+func classifySSHDialError(err error) (string, string) {
 	msg := strings.ToLower(err.Error())
 	switch {
 	case strings.Contains(msg, "connection refused"), strings.Contains(msg, "actively refused"):
-		return "ssh port is closed/refused; verify SSH is enabled on the CPE and the target port is correct"
+		return "connection_refused", "ssh port is closed/refused; verify SSH is enabled on the CPE and the target port is correct"
 	case strings.Contains(msg, "i/o timeout"), strings.Contains(msg, "timed out"):
-		return "tcp connect timed out; verify routing/firewall and target reachability"
+		return "timeout", "tcp connect timed out; verify routing/firewall and target reachability"
 	case strings.Contains(msg, "no route to host"), strings.Contains(msg, "host is unreachable"):
-		return "target unreachable; verify network path and CPE IP"
+		return "unreachable", "target unreachable; verify network path and CPE IP"
 	case strings.Contains(msg, "unable to authenticate"), strings.Contains(msg, "permission denied"):
-		return "authentication failed; verify model credentials and key/passphrase settings"
+		return "auth_failed", "authentication failed; verify model credentials and key/passphrase settings"
 	default:
-		return ""
+		return "other", ""
 	}
 }
 
