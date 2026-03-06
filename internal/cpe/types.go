@@ -2,10 +2,38 @@ package cpe
 
 import "time"
 
+type ActionOptions struct {
+	Model   string            `json:"model,omitempty"`
+	Action  string            `json:"action"`
+	Params  map[string]string `json:"params,omitempty"`
+	DryRun  bool              `json:"dryRun,omitempty"`
+	Profile string            `json:"profile,omitempty"`
+}
+
 type CollectOptions struct {
 	IncludeRaw bool
 	IncludePSK bool
 	Model      string
+}
+
+type ActionResponse struct {
+	IP          string            `json:"ip"`
+	Port        int               `json:"port"`
+	Model       string            `json:"model,omitempty"`
+	Action      string            `json:"action"`
+	Profile     string            `json:"profile,omitempty"`
+	Timestamp   time.Time         `json:"timestamp"`
+	DryRun      bool              `json:"dryRun,omitempty"`
+	SSHFailed   bool              `json:"sshFailed"`
+	Success     bool              `json:"success"`
+	Errors      []string          `json:"errors,omitempty"`
+	Command     string            `json:"command,omitempty"`
+	Params      map[string]string `json:"params,omitempty"`
+	Output      string            `json:"output,omitempty"`
+	Warnings    []string          `json:"warnings,omitempty"`
+	RequestID   string            `json:"requestId,omitempty"`
+	Retryable   bool              `json:"retryable,omitempty"`
+	CompletedAt *time.Time        `json:"completedAt,omitempty"`
 }
 
 type CollectResponse struct {

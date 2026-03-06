@@ -36,6 +36,22 @@ type Collector struct {
 	targetGates  map[string]chan struct{}
 }
 
+var supportedActions = map[string]map[string]actionDefinition{
+	"vantiva-openwrt-v1": {
+		"reboot":        {profile: "vantiva-openwrt-v1", command: "reboot"},
+		"semi_reset":    {profile: "vantiva-openwrt-v1", command: "rtfd --soft"},
+		"factory_reset": {profile: "vantiva-openwrt-v1", command: "rtfd"},
+	},
+	"zyxel-v1": {
+		"reboot":        {profile: "zyxel-v1", command: "reboot"},
+		"factory_reset": {profile: "zyxel-v1", command: "sys atcr reboot"},
+	},
+	"zyxel-ax-v1": {
+		"reboot":        {profile: "zyxel-ax-v1", command: "reboot"},
+		"factory_reset": {profile: "zyxel-ax-v1", command: "sys atcr reboot"},
+	},
+}
+
 type commandSpec struct {
 	key string
 	cmd string
@@ -45,6 +61,12 @@ type commandProfile struct {
 	name        string
 	commands    []commandSpec
 	cfgPrecheck bool
+}
+
+type actionDefinition struct {
+	profile string
+	command string
+	params  []string
 }
 
 type interactiveShell struct {
@@ -146,6 +168,105 @@ func (c *Collector) IsAllowedTarget(ipStr string) bool {
 		}
 	}
 	return false
+}
+
+func (c *Collector) PerformAction(ctx context.Context, ip string, port int, options ActionOptions) ActionResponse {
+	response := ActionResponse{
+		IP:        ip,
+		Port:      port,
+		Model:     options.Model,
+		Action:    options.Action,
+		Params:    options.Params,
+		DryRun:    options.DryRun,
+		Timestamp: time.Now().UTC(),
+	}
+
+	actionName := normalizeActionName(options.Action)
+	if actionName == "" {
+		response.Errors = append(response.Errors, "unsupported action")
+		return response
+	}
+
+	profile := commandProfileForModel(options.Model)
+	response.Profile = profile.name
+	def, ok := resolveActionDefinition(profile.name, actionName)
+	if !ok {
+		response.Errors = append(response.Errors, fmt.Sprintf("action %q is not supported for profile %q", actionName, profile.name))
+		return response
+	}
+
+	command, err := buildActionCommand(def, options.Params)
+	if err != nil {
+		response.Errors = append(response.Errors, err.Error())
+		return response
+	}
+	response.Action = actionName
+	response.Command = command
+
+	if options.DryRun {
+		response.Success = true
+		now := time.Now().UTC()
+		response.CompletedAt = &now
+		return response
+	}
+
+	releaseTarget, err := c.acquireTargetGate(ctx, ip)
+	if err != nil {
+		response.Errors = append(response.Errors, "target busy: "+err.Error())
+		response.Retryable = true
+		return response
+	}
+	defer releaseTarget()
+
+	client, err := c.sshDial(ctx, ip, port, options.Model)
+	if err != nil {
+		reason, hint := classifySSHDialError(err)
+		message := "ssh dial: " + err.Error()
+		if hint != "" {
+			message += " (" + hint + ")"
+		}
+		response.SSHFailed = true
+		response.Retryable = reason == "timeout" || reason == "unreachable"
+		response.Errors = append(response.Errors, message)
+		c.metrics.ObserveSSHDialFailure(options.Model, reason)
+		return response
+	}
+	defer client.Close()
+
+	shell, err := c.openInteractiveShell(ctx, client, ip, options.Model)
+	if err != nil {
+		response.SSHFailed = true
+		response.Errors = append(response.Errors, "shell handshake: "+err.Error())
+		response.Retryable = true
+		return response
+	}
+	defer shell.Close()
+
+	cmdStart := time.Now()
+	commandCtx, cancel := context.WithTimeout(ctx, c.cfg.SSHCommandTimeout)
+	output, runErr := shell.RunCommand(commandCtx, command)
+	cancel()
+	output = normalizeOutput(output)
+	duration := time.Since(cmdStart)
+
+	if runErr != nil {
+		result := "error"
+		if errorsIsTimeout(runErr) {
+			result = "timeout"
+			response.Retryable = true
+		}
+		response.Errors = append(response.Errors, fmt.Sprintf("%s: %v", actionName, runErr))
+		response.Output = output
+		c.metrics.ObserveCommandDuration(profile.name, "action_"+actionName, result, duration)
+		return response
+	}
+
+	response.Output = output
+	response.Success = true
+	now := time.Now().UTC()
+	response.CompletedAt = &now
+	c.metrics.ObserveCommandDuration(profile.name, "action_"+actionName, "success", duration)
+	return response
 }
 
 func (c *Collector) Collect(ctx context.Context, ip string, port int, options CollectOptions) CollectResponse {
@@ -362,6 +483,46 @@ func (c *Collector) populateParsedFields(out *CollectResponse, raw map[string]st
 			out.Uptime = uptime
 		}
 	}
+}
+
+func resolveActionDefinition(profileName, action string) (actionDefinition, bool) {
+	profileActions, ok := supportedActions[profileName]
+	if !ok {
+		return actionDefinition{}, false
+	}
+	def, ok := profileActions[action]
+	return def, ok
+}
+
+func normalizeActionName(action string) string {
+	action = strings.ToLower(strings.TrimSpace(action))
+	action = strings.ReplaceAll(action, "-", "_")
+	action = strings.ReplaceAll(action, " ", "_")
+	return action
+}
+
+func buildActionCommand(def actionDefinition, params map[string]string) (string, error) {
+	if len(def.params) == 0 {
+		return def.command, nil
+	}
+	parts := []string{def.command}
+	for _, key := range def.params {
+		value := strings.TrimSpace(params[key])
+		if value == "" {
+			return "", fmt.Errorf("missing required action param %q", key)
+		}
+		if !isActionParamSafe(value) {
+			return "", fmt.Errorf("invalid action param %q", key)
+		}
+		parts = append(parts, value)
+	}
+	return strings.Join(parts, " "), nil
+}
+
+var actionParamPattern = regexp.MustCompile(`^[A-Za-z0-9._:=/-]+$`)
+
+func isActionParamSafe(value string) bool {
+	return actionParamPattern.MatchString(value)
 }
 
 func (c *Collector) sshDial(ctx context.Context, ip string, port int, model string) (*ssh.Client, error) {
@@ -583,16 +744,46 @@ func fileExists(path string) bool {
 }
 
 func isVantivaModel(model string) bool {
-	return model == "VANTIVA"
+	upper := strings.ToUpper(strings.TrimSpace(model))
+	return upper == "VANTIVA" || strings.HasPrefix(upper, "F01") || strings.HasPrefix(upper, "F1X")
+}
+
+func isZyxelP2812Model(model string) bool {
+	upper := strings.ToUpper(strings.TrimSpace(model))
+	return strings.Contains(upper, "P2812") || strings.Contains(upper, "EMG")
+}
+
+func isZyxelFMGModel(model string) bool {
+	upper := strings.ToUpper(strings.TrimSpace(model))
+	return strings.Contains(upper, "FMG")
+}
+
+func isZyxelVMGModel(model string) bool {
+	upper := strings.ToUpper(strings.TrimSpace(model))
+	return strings.Contains(upper, "VMG")
+}
+
+func isZyxelEXModel(model string) bool {
+	upper := strings.ToUpper(strings.TrimSpace(model))
+	return strings.Contains(upper, "EX")
+}
+
+func isZyxelAXModel(model string) bool {
+	upper := strings.ToUpper(strings.TrimSpace(model))
+	return strings.Contains(upper, "AX")
+}
+
+func isZyxelModelWithSharedKey(model string) bool {
+	return isZyxelVMGModel(model) || isZyxelEXModel(model) || isZyxelAXModel(model)
 }
 
 func zyxelKeyForModel(model string) (string, bool) {
 	switch {
-	case strings.Contains(model, "P2812"):
+	case isZyxelP2812Model(model):
 		return keyFileP2812, true
-	case strings.Contains(model, "FMG"):
+	case isZyxelFMGModel(model):
 		return keyFileFMG, true
-	case strings.Contains(model, "VMG"), strings.Contains(model, "AX"), strings.Contains(model, "EX"):
+	case isZyxelModelWithSharedKey(model):
 		return keyFileVMG, true
 	default:
 		return "", false
@@ -608,10 +799,19 @@ func commandProfileForModel(model string) commandProfile {
 			commands:    vantivaCommands,
 			cfgPrecheck: false,
 		}
-	case strings.Contains(upper, "AX"):
+	case isZyxelAXModel(upper):
 		return commandProfile{
 			name:        "zyxel-ax-v1",
 			commands:    zyxelCommandsNoSFP,
+			cfgPrecheck: true,
+		}
+	case isZyxelVMGModel(upper),
+		isZyxelEXModel(upper),
+		isZyxelP2812Model(upper),
+		isZyxelFMGModel(upper):
+		return commandProfile{
+			name:        "zyxel-v1",
+			commands:    zyxelCommandsWithSFP,
 			cfgPrecheck: true,
 		}
 	default:
@@ -943,13 +1143,13 @@ func terminalProfile(model string) (term string, rows, cols int, modes ssh.Termi
 
 	upper := strings.ToUpper(strings.TrimSpace(model))
 	switch {
-	case upper == "VANTIVA":
+	case isVantivaModel(upper):
 		return "xterm", 60, 200, base
-	case strings.Contains(upper, "FMG"),
-		strings.Contains(upper, "P2812"),
-		strings.Contains(upper, "VMG"),
-		strings.Contains(upper, "AX"),
-		strings.Contains(upper, "EX"):
+	case isZyxelFMGModel(upper),
+		isZyxelP2812Model(upper),
+		isZyxelVMGModel(upper),
+		isZyxelAXModel(upper),
+		isZyxelEXModel(upper):
 		return "vt100", 60, 200, base
 	default:
 		return "xterm", 50, 160, base

@@ -12,14 +12,25 @@ The canonical API contract is maintained in [internal/httpapi/docs/openapi.yaml]
 - `GET /openapi.yaml`
 - `GET /docs` (Swagger UI)
 - `GET /metrics` (Prometheus scrape endpoint)
-- `GET /v1/cpe/collect?ip=192.168.1.1&port=22&model=VANTIVA&raw=1&includePsk=0`
+- `GET /v1/cpe/collect?ip=192.168.1.1&port=22&model=F01&raw=1&includePsk=0`
 - `POST /v1/cpe/collect?raw=1&includePsk=0` with JSON body:
+- `POST /v1/cpe/actions` with JSON body:
 
 ```json
 {
   "ip": "192.168.1.1",
   "port": 22,
-  "model": "VANTIVA"
+  "model": "F01"
+}
+```
+
+```json
+{
+  "ip": "192.168.1.1",
+  "port": 22,
+  "model": "EX5401",
+  "action": "reboot",
+  "dryRun": true
 }
 ```
 
@@ -48,6 +59,19 @@ The canonical API contract is maintained in [internal/httpapi/docs/openapi.yaml]
 - Unknown model values use the ZyXEL-compatible default profile.
 - Evidence and confirmation state per model is tracked in `docs/device-command-matrix.md`.
 
+## CPE actions
+
+- Supported actions are exposed through `POST /v1/cpe/actions`.
+- VANTIVA OpenWRT family (`F01`, `F1X`, `VANTIVA`) supports:
+  - `reboot`
+  - `semi_reset`
+  - `factory_reset`
+- ZyXEL family (`VMG8825` / `VMG`, `EX5401`, `EX5601`, `AX7501` / `AX`, `FMG`, `EMG-P2812` / `EMG`) supports:
+  - `reboot`
+  - `factory_reset`
+- Use `"dryRun": true` to validate the resolved command/profile without executing the action on the device.
+- TR-069 parameter presence is still documented in `docs/device-command-matrix.md`, but no TR-069 mutation endpoint is exposed yet.
+
 ## Security defaults
 
 - Optional bearer auth (`CPE_API_KEY`)
@@ -74,8 +98,8 @@ The canonical API contract is maintained in [internal/httpapi/docs/openapi.yaml]
 - `CPE_SSH_KEY_PASSPHRASE` (optional)
 - `CPE_SSH_KEYS_DIR` (default `cpe-ssh-keys`, required for model-based key lookup)
 - `CPE_SSH_MODEL_KEY_MAP` (optional format: `MODEL=FILENAME,MODEL2=FILENAME2`)
-- `VANTIVA_CPE_CLI_USER` (required for `model=VANTIVA`)
-- `VANTIVA_CPE_CLI_PASSWORD` (required for `model=VANTIVA`)
+- `VANTIVA_CPE_CLI_USER` (required for VANTIVA OpenWRT models such as `F01`, `F1X`, and `VANTIVA`)
+- `VANTIVA_CPE_CLI_PASSWORD` (required for VANTIVA OpenWRT models such as `F01`, `F1X`, and `VANTIVA`)
 - `CPE_SSH_KNOWN_HOSTS` (required unless insecure host key is enabled)
 - `CPE_SSH_INSECURE_HOSTKEY` (default `false`, not recommended)
 
@@ -143,6 +167,15 @@ curl -sS -X POST "http://localhost:8080/v1/cpe/collect" \
   -H "Authorization: Bearer change-me" \
   -H "Content-Type: application/json" \
   -d '{"ip":"192.168.1.1","model":"FMG"}'
+```
+
+Action dry-run example:
+
+```bash
+curl -sS -X POST "http://localhost:8080/v1/cpe/actions" \
+  -H "Authorization: Bearer change-me" \
+  -H "Content-Type: application/json" \
+  -d '{"ip":"192.168.1.1","model":"EX5401","action":"reboot","dryRun":true}'
 ```
 
 PowerShell example:

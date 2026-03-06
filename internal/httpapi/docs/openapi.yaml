@@ -190,6 +190,61 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CollectResponse"
+  /v1/cpe/actions:
+    post:
+      operationId: performCpeAction
+      tags: [CPE]
+      summary: Execute a supported CPE action
+      description: Executes documented device actions for supported profiles. OpenWRT VANTIVA variants support reboot, semi_reset, and factory_reset. ZyXEL variants support reboot and factory_reset.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ActionRequest"
+            example:
+              ip: 10.13.94.62
+              port: 22
+              model: EX5401
+              action: reboot
+              dryRun: true
+      responses:
+        "200":
+          description: Action accepted and executed successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActionResponse"
+              example:
+                ip: 10.13.94.62
+                port: 22
+                model: F01
+                action: reboot
+                profile: vantiva-openwrt-v1
+                timestamp: "2026-03-06T00:00:00Z"
+                dryRun: true
+                sshFailed: false
+                success: true
+                command: reboot
+                requestId: 9ad72bb676f0460d8d9cb7f66d9a4f43
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "502":
+          description: SSH connection failed while executing the action
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActionResponse"
 components:
   securitySchemes:
     bearerAuth:
@@ -285,6 +340,36 @@ components:
       properties:
         status:
           type: string
+    ActionRequest:
+      type: object
+      additionalProperties: false
+      required: [ip, action]
+      properties:
+        ip:
+          type: string
+          example: 10.13.94.62
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          default: 22
+        model:
+          type: string
+          pattern: ^[A-Za-z0-9._-]+$
+          description: VANTIVA family uses the OpenWRT profile, including F01 and F1X. ZyXEL aliases include VMG8825 or VMG, EX5401, EX5601, AX7501 or AX, FMG, and EMG-P2812 or EMG.
+          example: EX5401
+        action:
+          type: string
+          pattern: ^[A-Za-z0-9._:=/-]+$
+          description: Supported values depend on device profile. Common actions are reboot, factory_reset, and semi_reset for VANTIVA OpenWRT devices.
+          example: reboot
+        params:
+          type: object
+          additionalProperties:
+            type: string
+        dryRun:
+          type: boolean
+          default: false
     CollectRequest:
       type: object
       additionalProperties: false
@@ -394,6 +479,53 @@ components:
           type: object
           additionalProperties:
             type: string
+    ActionResponse:
+      type: object
+      additionalProperties: false
+      required: [ip, port, action, timestamp, sshFailed, success]
+      properties:
+        ip:
+          type: string
+        port:
+          type: integer
+        model:
+          type: string
+        action:
+          type: string
+        profile:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        dryRun:
+          type: boolean
+        sshFailed:
+          type: boolean
+        success:
+          type: boolean
+        errors:
+          type: array
+          items:
+            type: string
+        command:
+          type: string
+        params:
+          type: object
+          additionalProperties:
+            type: string
+        output:
+          type: string
+        warnings:
+          type: array
+          items:
+            type: string
+        requestId:
+          type: string
+        retryable:
+          type: boolean
+        completedAt:
+          type: string
+          format: date-time
     UptimeInfo:
       type: object
       additionalProperties: false

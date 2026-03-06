@@ -30,6 +30,7 @@ type requestIDKey struct{}
 
 type collector interface {
 	Collect(ctx context.Context, ip string, port int, options cpe.CollectOptions) cpe.CollectResponse
+	PerformAction(ctx context.Context, ip string, port int, options cpe.ActionOptions) cpe.ActionResponse
 	IsAllowedTarget(ipStr string) bool
 }
 
@@ -47,6 +48,15 @@ type CollectRequestBody struct {
 	IP    string `json:"ip"`
 	Port  int    `json:"port,omitempty"`
 	Model string `json:"model,omitempty"`
+}
+
+type ActionRequestBody struct {
+	IP     string            `json:"ip"`
+	Port   int               `json:"port,omitempty"`
+	Model  string            `json:"model,omitempty"`
+	Action string            `json:"action"`
+	Params map[string]string `json:"params,omitempty"`
+	DryRun bool              `json:"dryRun,omitempty"`
 }
 
 func NewServer(cfg config.Config, logger *slog.Logger, c collector, metrics *observability.Registry) http.Handler {
@@ -74,6 +84,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/docs/", s.handleSwaggerUI)
 	s.mux.Handle("/metrics", promhttp.HandlerFor(s.metrics.PrometheusGatherer(), promhttp.HandlerOpts{}))
 	s.mux.HandleFunc("/v1/cpe/collect", s.handleCollect)
+	s.mux.HandleFunc("/v1/cpe/actions", s.handleAction)
 }
 
 // handleHealthz godoc
@@ -171,6 +182,64 @@ func (s *Server) handleCollect(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
+func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		writeError(r.Context(), w, http.StatusMethodNotAllowed, "method_not_allowed", "use POST", false, nil)
+		return
+	}
+
+	select {
+	case s.sem <- struct{}{}:
+		defer func() { <-s.sem }()
+	default:
+		s.metrics.ObserveConcurrencyReject("http_semaphore")
+		writeError(r.Context(), w, http.StatusTooManyRequests, "too_many_requests", "server is at max concurrency", true, nil)
+		return
+	}
+
+	target, action, err := parseActionTarget(r)
+	if err != nil {
+		status := http.StatusBadRequest
+		code := "bad_request"
+		if errors.Is(err, errRequestBodyTooLarge) {
+			status = http.StatusRequestEntityTooLarge
+			code = "request_body_too_large"
+		}
+		writeError(r.Context(), w, status, code, err.Error(), false, nil)
+		return
+	}
+
+	parsedIP := net.ParseIP(target.IP)
+	if parsedIP == nil {
+		writeError(r.Context(), w, http.StatusBadRequest, "bad_request", "invalid ip", false, map[string]any{"field": "ip"})
+		return
+	}
+	if !s.collector.IsAllowedTarget(parsedIP.String()) {
+		writeError(r.Context(), w, http.StatusForbidden, "forbidden", "target ip not allowed", false, nil)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.RequestTimeout)
+	defer cancel()
+
+	response := s.collector.PerformAction(ctx, parsedIP.String(), target.Port, action)
+	response.RequestID, _ = r.Context().Value(requestIDKey{}).(string)
+	if response.SSHFailed {
+		writeJSON(w, http.StatusBadGateway, response)
+		return
+	}
+	if !response.Success {
+		message := "action failed"
+		if len(response.Errors) > 0 {
+			message = firstNonEmpty(response.Errors[0], message)
+		}
+		writeError(r.Context(), w, http.StatusBadRequest, "unsupported_action", message, response.Retryable, map[string]any{"action": response.Action, "profile": response.Profile})
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
 type collectTarget struct {
 	IP    string
 	Port  int
@@ -215,10 +284,55 @@ func parseCollectTarget(r *http.Request) (collectTarget, error) {
 	return target, nil
 }
 
+func parseActionTarget(r *http.Request) (collectTarget, cpe.ActionOptions, error) {
+	target := collectTarget{Port: 22}
+	var req ActionRequestBody
+	if err := decodeJSONBody(r, &req); err != nil {
+		return collectTarget{}, cpe.ActionOptions{}, err
+	}
+	target.IP = strings.TrimSpace(req.IP)
+	target.Model = strings.TrimSpace(req.Model)
+	if req.Port != 0 {
+		if req.Port < 1 || req.Port > 65535 {
+			return collectTarget{}, cpe.ActionOptions{}, errors.New("invalid port")
+		}
+		target.Port = req.Port
+	}
+	if target.IP == "" {
+		return collectTarget{}, cpe.ActionOptions{}, errors.New("missing ip")
+	}
+	if target.Model != "" && !isModelSafe(target.Model) {
+		return collectTarget{}, cpe.ActionOptions{}, errors.New("invalid model")
+	}
+	action := strings.TrimSpace(req.Action)
+	if action == "" {
+		return collectTarget{}, cpe.ActionOptions{}, errors.New("missing action")
+	}
+	if !isActionSafe(action) {
+		return collectTarget{}, cpe.ActionOptions{}, errors.New("invalid action")
+	}
+	for key, value := range req.Params {
+		if !isActionSafe(key) || !isActionSafe(value) {
+			return collectTarget{}, cpe.ActionOptions{}, errors.New("invalid action params")
+		}
+	}
+	return target, cpe.ActionOptions{
+		Model:  target.Model,
+		Action: action,
+		Params: req.Params,
+		DryRun: req.DryRun,
+	}, nil
+}
+
 var modelPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+var actionPattern = regexp.MustCompile(`^[A-Za-z0-9._:=/-]+$`)
 
 func isModelSafe(model string) bool {
 	return modelPattern.MatchString(model)
+}
+
+func isActionSafe(value string) bool {
+	return actionPattern.MatchString(strings.TrimSpace(value))
 }
 
 var errRequestBodyTooLarge = errors.New("request body too large")
@@ -407,11 +521,20 @@ func writeError(ctx context.Context, w http.ResponseWriter, status int, code, me
 
 func canonicalRoute(path string) string {
 	switch path {
-	case "/healthz", "/readyz", "/openapi.yaml", "/docs", "/docs/", "/metrics", "/v1/cpe/collect":
+	case "/healthz", "/readyz", "/openapi.yaml", "/docs", "/docs/", "/metrics", "/v1/cpe/collect", "/v1/cpe/actions":
 		return path
 	default:
 		return "unknown"
 	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func collectorResultFromResponse(response cpe.CollectResponse) string {
