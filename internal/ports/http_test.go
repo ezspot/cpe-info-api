@@ -1,4 +1,4 @@
-package httpapi
+package ports
 
 import (
 	"bytes"
@@ -9,23 +9,40 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"cpe-api/internal/app"
+	"cpe-api/internal/app/command"
+	"cpe-api/internal/app/query"
 	"cpe-api/internal/config"
 	"cpe-api/internal/cpe"
 	"cpe-api/internal/observability"
+	"cpe-api/internal/tcerr"
+
+	"go.opentelemetry.io/otel"
 )
 
-type stubCollector struct {
+type stubModel struct {
 	allowed        bool
 	response       cpe.CollectResponse
 	actionResponse cpe.ActionResponse
-	calls          int
+
+	collectStarted chan struct{}
+	collectRelease chan struct{}
 }
 
-func (s *stubCollector) Collect(_ context.Context, ip string, port int, options cpe.CollectOptions) cpe.CollectResponse {
-	s.calls++
+func (s *stubModel) IsAllowedTarget(string) bool { return s.allowed }
+
+func (s *stubModel) Collect(_ context.Context, ip string, port int, options cpe.CollectOptions) cpe.CollectResponse {
+	if s.collectStarted != nil {
+		close(s.collectStarted)
+		s.collectStarted = nil
+	}
+	if s.collectRelease != nil {
+		<-s.collectRelease
+	}
 	resp := s.response
 	if resp.IP == "" {
 		resp.IP = ip
@@ -42,7 +59,7 @@ func (s *stubCollector) Collect(_ context.Context, ip string, port int, options 
 	return resp
 }
 
-func (s *stubCollector) PerformAction(_ context.Context, ip string, port int, options cpe.ActionOptions) cpe.ActionResponse {
+func (s *stubModel) PerformAction(_ context.Context, ip string, port int, options cpe.ActionOptions) cpe.ActionResponse {
 	resp := s.actionResponse
 	if resp.IP == "" {
 		resp.IP = ip
@@ -65,10 +82,6 @@ func (s *stubCollector) PerformAction(_ context.Context, ip string, port int, op
 	return resp
 }
 
-func (s *stubCollector) IsAllowedTarget(_ string) bool {
-	return s.allowed
-}
-
 func newTestConfig() config.Config {
 	return config.Config{
 		APIKey:         "secret-token",
@@ -77,15 +90,26 @@ func newTestConfig() config.Config {
 	}
 }
 
-func newTestLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
+func newTestServer(t *testing.T, cfg config.Config, model *stubModel, metrics *observability.Registry) http.Handler {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	tracer := otel.Tracer("test")
+	application := &app.Application{
+		Commands: app.Commands{
+			PerformCpeAction: command.NewPerformCpeActionHandler(model, logger, tracer),
+		},
+		Queries: app.Queries{
+			CollectCpeInfo: query.NewCollectCpeInfoHandler(model, logger, tracer),
+		},
+	}
+	return NewHttpServer(application, cfg, logger, metrics)
 }
 
-func decodeErrorEnvelope(t *testing.T, body *bytes.Buffer) apiErrorEnvelope {
+func decodeErrorEnvelope(t *testing.T, body *bytes.Buffer) tcerr.ErrorEnvelope {
 	t.Helper()
-	var envelope apiErrorEnvelope
+	var envelope tcerr.ErrorEnvelope
 	if err := json.Unmarshal(body.Bytes(), &envelope); err != nil {
-		t.Fatalf("decode error envelope: %v", err)
+		t.Fatalf("decode error envelope: %v, body=%s", err, body.String())
 	}
 	return envelope
 }
@@ -99,7 +123,6 @@ func TestHandleCollectErrorContract(t *testing.T) {
 		apiKeyEnabled  bool
 		authHeader     string
 		allowed        bool
-		prefillSem     bool
 		response       cpe.CollectResponse
 		wantStatus     int
 		wantCode       string
@@ -108,15 +131,13 @@ func TestHandleCollectErrorContract(t *testing.T) {
 		wantMessageSub string
 	}{
 		{
-			name:           "method not allowed",
-			method:         http.MethodDelete,
-			target:         "/v1/cpe/collect",
-			apiKeyEnabled:  false,
-			allowed:        true,
-			wantStatus:     http.StatusMethodNotAllowed,
-			wantCode:       "method_not_allowed",
-			wantRetryable:  false,
-			wantMessageSub: "use GET or POST",
+			name:          "method not allowed",
+			method:        http.MethodDelete,
+			target:        "/v1/cpe/collect",
+			allowed:       true,
+			wantStatus:    http.StatusMethodNotAllowed,
+			wantCode:      "method_not_allowed",
+			wantRetryable: false,
 		},
 		{
 			name:           "missing bearer token",
@@ -126,7 +147,6 @@ func TestHandleCollectErrorContract(t *testing.T) {
 			allowed:        true,
 			wantStatus:     http.StatusUnauthorized,
 			wantCode:       "unauthorized",
-			wantRetryable:  false,
 			wantMessageSub: "missing bearer token",
 		},
 		{
@@ -138,53 +158,45 @@ func TestHandleCollectErrorContract(t *testing.T) {
 			allowed:        false,
 			wantStatus:     http.StatusForbidden,
 			wantCode:       "forbidden",
-			wantRetryable:  false,
 			wantMessageSub: "target ip not allowed",
 		},
 		{
 			name:           "invalid ip details",
 			method:         http.MethodGet,
 			target:         "/v1/cpe/collect?ip=not-an-ip",
-			apiKeyEnabled:  false,
 			allowed:        true,
 			wantStatus:     http.StatusBadRequest,
 			wantCode:       "bad_request",
-			wantRetryable:  false,
 			wantDetailKey:  "field",
 			wantMessageSub: "invalid ip",
+		},
+		{
+			name:           "unknown json field rejected",
+			method:         http.MethodPost,
+			target:         "/v1/cpe/collect",
+			body:           `{"ip":"10.0.0.1","bogus":true}`,
+			allowed:        true,
+			wantStatus:     http.StatusBadRequest,
+			wantCode:       "bad_request",
+			wantMessageSub: "unknown field",
 		},
 		{
 			name:           "request body too large",
 			method:         http.MethodPost,
 			target:         "/v1/cpe/collect",
-			apiKeyEnabled:  false,
 			allowed:        true,
 			body:           "{" + strings.Repeat(`"x":"0123456789",`, 70000) + `"ip":"10.0.0.1"}`,
 			wantStatus:     http.StatusRequestEntityTooLarge,
 			wantCode:       "request_body_too_large",
-			wantRetryable:  false,
 			wantMessageSub: "request body too large",
 		},
 		{
-			name:           "too many requests",
-			method:         http.MethodGet,
-			target:         "/v1/cpe/collect?ip=10.0.0.1",
-			apiKeyEnabled:  false,
-			allowed:        true,
-			prefillSem:     true,
-			wantStatus:     http.StatusTooManyRequests,
-			wantCode:       "too_many_requests",
-			wantRetryable:  true,
-			wantMessageSub: "server is at max concurrency",
-		},
-		{
-			name:          "ssh failed is passthrough response",
-			method:        http.MethodGet,
-			target:        "/v1/cpe/collect?ip=10.0.0.1&model=EX",
-			apiKeyEnabled: false,
-			allowed:       true,
-			response:      cpe.CollectResponse{SSHFailed: true, Errors: []string{"ssh dial: timeout"}},
-			wantStatus:    http.StatusBadGateway,
+			name:       "ssh failed is passthrough response",
+			method:     http.MethodGet,
+			target:     "/v1/cpe/collect?ip=10.0.0.1&model=EX",
+			allowed:    true,
+			response:   cpe.CollectResponse{SSHFailed: true, Errors: []string{"ssh dial: timeout"}},
+			wantStatus: http.StatusBadGateway,
 		},
 	}
 
@@ -194,23 +206,10 @@ func TestHandleCollectErrorContract(t *testing.T) {
 			if !tt.apiKeyEnabled {
 				cfg.APIKey = ""
 			}
-			collector := &stubCollector{allowed: tt.allowed, response: tt.response}
-			metrics := observability.NewRegistry()
-			server := &Server{
-				cfg:       cfg,
-				log:       newTestLogger(),
-				collector: collector,
-				metrics:   metrics,
-				sem:       make(chan struct{}, cfg.Concurrency),
-				mux:       http.NewServeMux(),
-			}
-			server.routes()
-			handler := server.recoverMiddleware(server.requestIDMiddleware(server.authMiddleware(server.metricsMiddleware(server.loggingMiddleware(server.mux)))))
-			if tt.prefillSem {
-				server.sem <- struct{}{}
-			}
-			body := bytes.NewBufferString(tt.body)
-			req := httptest.NewRequest(tt.method, tt.target, body)
+			model := &stubModel{allowed: tt.allowed, response: tt.response}
+			handler := newTestServer(t, cfg, model, observability.NewRegistry())
+
+			req := httptest.NewRequest(tt.method, tt.target, bytes.NewBufferString(tt.body))
 			if tt.authHeader != "" {
 				req.Header.Set("Authorization", tt.authHeader)
 			}
@@ -260,28 +259,61 @@ func TestHandleCollectErrorContract(t *testing.T) {
 	}
 }
 
-func TestMetricsEndpointExposesHTTPAndCollectorMetrics(t *testing.T) {
-	collector := &stubCollector{
-		allowed: true,
-		response: cpe.CollectResponse{
-			Errors: []string{"wifi24: Process exited with status 127"},
-		},
-	}
+func TestConcurrencyLimitRejects(t *testing.T) {
 	cfg := newTestConfig()
 	cfg.APIKey = ""
+	started := make(chan struct{})
+	release := make(chan struct{})
+	model := &stubModel{allowed: true, collectStarted: started, collectRelease: release}
 	metrics := observability.NewRegistry()
-	handler := NewServer(cfg, newTestLogger(), collector, metrics)
+	handler := newTestServer(t, cfg, model, metrics)
 
-	collectReq := httptest.NewRequest(http.MethodGet, "/v1/cpe/collect?ip=10.0.0.1&model=EX", nil)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	firstRec := httptest.NewRecorder()
+	go func() {
+		defer wg.Done()
+		req := httptest.NewRequest(http.MethodGet, "/v1/cpe/collect?ip=10.0.0.1", nil)
+		handler.ServeHTTP(firstRec, req)
+	}()
+
+	<-started
+
+	secondRec := httptest.NewRecorder()
+	handler.ServeHTTP(secondRec, httptest.NewRequest(http.MethodGet, "/v1/cpe/collect?ip=10.0.0.2", nil))
+	if secondRec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429, body=%s", secondRec.Code, secondRec.Body.String())
+	}
+	envelope := decodeErrorEnvelope(t, secondRec.Body)
+	if envelope.Error.Code != "too_many_requests" {
+		t.Fatalf("error.code = %q, want too_many_requests", envelope.Error.Code)
+	}
+	if !envelope.Error.Retryable {
+		t.Fatalf("expected retryable true")
+	}
+
+	close(release)
+	wg.Wait()
+	if firstRec.Code != http.StatusOK {
+		t.Fatalf("first request status = %d, want 200, body=%s", firstRec.Code, firstRec.Body.String())
+	}
+}
+
+func TestMetricsEndpointExposesHTTPMetrics(t *testing.T) {
+	cfg := newTestConfig()
+	cfg.APIKey = ""
+	model := &stubModel{allowed: true}
+	metrics := observability.NewRegistry()
+	handler := newTestServer(t, cfg, model, metrics)
+
 	collectRec := httptest.NewRecorder()
-	handler.ServeHTTP(collectRec, collectReq)
+	handler.ServeHTTP(collectRec, httptest.NewRequest(http.MethodGet, "/v1/cpe/collect?ip=10.0.0.1&model=EX", nil))
 	if collectRec.Code != http.StatusOK {
 		t.Fatalf("collect status = %d, want 200, body=%s", collectRec.Code, collectRec.Body.String())
 	}
 
-	metricsReq := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	metricsRec := httptest.NewRecorder()
-	handler.ServeHTTP(metricsRec, metricsReq)
+	handler.ServeHTTP(metricsRec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if metricsRec.Code != http.StatusOK {
 		t.Fatalf("metrics status = %d, want 200", metricsRec.Code)
 	}
@@ -290,14 +322,29 @@ func TestMetricsEndpointExposesHTTPAndCollectorMetrics(t *testing.T) {
 	for _, fragment := range []string{
 		"cpe_api_http_requests_total",
 		"cpe_api_http_request_duration_seconds",
-		"cpe_api_collector_requests_total",
+		`route="/v1/cpe/collect"`,
 	} {
 		if !strings.Contains(body, fragment) {
 			t.Fatalf("metrics output missing %q", fragment)
 		}
 	}
-	if !strings.Contains(body, `result="partial_success"`) {
-		t.Fatalf("metrics output missing partial_success collector label: %s", body)
+}
+
+func TestHealthAndRequestIDEcho(t *testing.T) {
+	cfg := newTestConfig()
+	model := &stubModel{allowed: true}
+	handler := newTestServer(t, cfg, model, observability.NewRegistry())
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req.Header.Set("X-Request-Id", "test-id-123")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("healthz status = %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get("X-Request-Id"); got != "test-id-123" {
+		t.Fatalf("X-Request-Id = %q, want echo of test-id-123", got)
 	}
 }
 
@@ -309,27 +356,23 @@ func TestHandleAction(t *testing.T) {
 		apiKeyEnabled  bool
 		authHeader     string
 		allowed        bool
-		prefillSem     bool
 		actionResponse cpe.ActionResponse
 		wantStatus     int
 		wantCode       string
 		wantMessageSub string
 	}{
 		{
-			name:           "method not allowed",
-			method:         http.MethodGet,
-			body:           `{}`,
-			apiKeyEnabled:  false,
-			allowed:        true,
-			wantStatus:     http.StatusMethodNotAllowed,
-			wantCode:       "method_not_allowed",
-			wantMessageSub: "use POST",
+			name:       "method not allowed",
+			method:     http.MethodGet,
+			body:       `{}`,
+			allowed:    true,
+			wantStatus: http.StatusMethodNotAllowed,
+			wantCode:   "method_not_allowed",
 		},
 		{
 			name:           "missing action",
 			method:         http.MethodPost,
 			body:           `{"ip":"10.0.0.1","model":"EX5401"}`,
-			apiKeyEnabled:  false,
 			allowed:        true,
 			wantStatus:     http.StatusBadRequest,
 			wantCode:       "bad_request",
@@ -350,7 +393,6 @@ func TestHandleAction(t *testing.T) {
 			name:           "unsupported action",
 			method:         http.MethodPost,
 			body:           `{"ip":"10.0.0.1","model":"EX5401","action":"semi_reset"}`,
-			apiKeyEnabled:  false,
 			allowed:        true,
 			actionResponse: cpe.ActionResponse{Success: false, Profile: "zyxel-v1", Errors: []string{"action \"semi_reset\" is not supported for profile \"zyxel-v1\""}},
 			wantStatus:     http.StatusBadRequest,
@@ -361,7 +403,6 @@ func TestHandleAction(t *testing.T) {
 			name:           "ssh failure passthrough",
 			method:         http.MethodPost,
 			body:           `{"ip":"10.0.0.1","model":"EX5401","action":"reboot"}`,
-			apiKeyEnabled:  false,
 			allowed:        true,
 			actionResponse: cpe.ActionResponse{SSHFailed: true, Errors: []string{"ssh dial: timeout"}, Retryable: true},
 			wantStatus:     http.StatusBadGateway,
@@ -370,7 +411,6 @@ func TestHandleAction(t *testing.T) {
 			name:           "success",
 			method:         http.MethodPost,
 			body:           `{"ip":"10.0.0.1","model":"F01","action":"reboot","dryRun":true}`,
-			apiKeyEnabled:  false,
 			allowed:        true,
 			actionResponse: cpe.ActionResponse{Success: true, Profile: "vantiva-openwrt-v1", Command: "reboot", DryRun: true},
 			wantStatus:     http.StatusOK,
@@ -383,21 +423,9 @@ func TestHandleAction(t *testing.T) {
 			if !tt.apiKeyEnabled {
 				cfg.APIKey = ""
 			}
-			collector := &stubCollector{allowed: tt.allowed, actionResponse: tt.actionResponse}
-			metrics := observability.NewRegistry()
-			server := &Server{
-				cfg:       cfg,
-				log:       newTestLogger(),
-				collector: collector,
-				metrics:   metrics,
-				sem:       make(chan struct{}, cfg.Concurrency),
-				mux:       http.NewServeMux(),
-			}
-			server.routes()
-			handler := server.recoverMiddleware(server.requestIDMiddleware(server.authMiddleware(server.metricsMiddleware(server.loggingMiddleware(server.mux)))))
-			if tt.prefillSem {
-				server.sem <- struct{}{}
-			}
+			model := &stubModel{allowed: tt.allowed, actionResponse: tt.actionResponse}
+			handler := newTestServer(t, cfg, model, observability.NewRegistry())
+
 			req := httptest.NewRequest(tt.method, "/v1/cpe/actions", bytes.NewBufferString(tt.body))
 			req.Header.Set("Content-Type", "application/json")
 			if tt.authHeader != "" {

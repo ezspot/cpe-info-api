@@ -88,7 +88,7 @@ func (r *Registry) PrometheusGatherer() prometheus.Gatherer {
 	return r.registry
 }
 
-func (r *Registry) ObserveHTTPRequest(route, method string, status int, duration time.Duration, _ int) {
+func (r *Registry) ObserveHTTPRequest(route, method string, status int, duration time.Duration) {
 	r.httpRequestsTotal.WithLabelValues(normalizeRoute(route), normalizeMethod(method), normalizeStatus(status)).Inc()
 	r.httpRequestDuration.WithLabelValues(normalizeRoute(route), normalizeMethod(method)).Observe(duration.Seconds())
 }

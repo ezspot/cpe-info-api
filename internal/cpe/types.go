@@ -3,11 +3,10 @@ package cpe
 import "time"
 
 type ActionOptions struct {
-	Model   string            `json:"model,omitempty"`
-	Action  string            `json:"action"`
-	Params  map[string]string `json:"params,omitempty"`
-	DryRun  bool              `json:"dryRun,omitempty"`
-	Profile string            `json:"profile,omitempty"`
+	Model  string            `json:"model,omitempty"`
+	Action string            `json:"action"`
+	Params map[string]string `json:"params,omitempty"`
+	DryRun bool              `json:"dryRun,omitempty"`
 }
 
 type CollectOptions struct {
@@ -30,11 +29,10 @@ type ActionResponse struct {
 	Command     string            `json:"command,omitempty"`
 	Params      map[string]string `json:"params,omitempty"`
 	Output      string            `json:"output,omitempty"`
-	Warnings    []string          `json:"warnings,omitempty"`
 	RequestID   string            `json:"requestId,omitempty"`
 	Retryable   bool              `json:"retryable,omitempty"`
 	CompletedAt *time.Time        `json:"completedAt,omitempty"`
-}
+} // @Name ActionResponse
 
 type CollectResponse struct {
 	IP        string    `json:"ip"`
@@ -60,7 +58,7 @@ type CollectResponse struct {
 	Sfp      *SfpInfo          `json:"sfp,omitempty"`
 
 	Raw map[string]string `json:"raw,omitempty"`
-}
+} // @Name CollectResponse
 
 type UptimeInfo struct {
 	Raw       string     `json:"raw"`

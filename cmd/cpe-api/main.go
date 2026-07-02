@@ -1,3 +1,12 @@
+// @title CPE Info API
+// @version 1.0
+// @description Collect CPE diagnostics over SSH with model-aware authentication.
+// @BasePath /
+// @schemes http https
+// @securityDefinitions.apikey BearerAuth
+// @in header
+// @name Authorization
+// @description Use `Bearer <token>`.
 package main
 
 import (
@@ -11,9 +20,9 @@ import (
 	"time"
 
 	"cpe-api/internal/config"
-	"cpe-api/internal/cpe"
-	"cpe-api/internal/httpapi"
 	"cpe-api/internal/observability"
+	"cpe-api/internal/ports"
+	"cpe-api/internal/service"
 )
 
 func main() {
@@ -22,6 +31,7 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: cfg.LogLevel,
 	}))
+	slog.SetDefault(logger)
 
 	allowedCIDRs := make([]string, 0, len(cfg.AllowedTargetCIDRs))
 	for _, n := range cfg.AllowedTargetCIDRs {
@@ -34,19 +44,26 @@ func main() {
 		"ssh_keys_dir", cfg.SSHKeysDir,
 	)
 
-	metrics := observability.NewRegistry()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
-	collector, err := cpe.NewCollector(cfg, logger, metrics)
+	shutdownTracing, err := observability.SetupTracing(ctx, "cpe-info-api")
 	if err != nil {
-		logger.Error("collector init failed", "error", err)
+		logger.Error("tracing init failed", "error", err)
 		os.Exit(1)
 	}
 
-	handler := httpapi.NewServer(cfg, logger, collector, metrics)
+	metrics := observability.NewRegistry()
+
+	application, err := service.NewApplication(cfg, logger, metrics)
+	if err != nil {
+		logger.Error("application init failed", "error", err)
+		os.Exit(1)
+	}
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           handler,
+		Handler:           ports.NewHttpServer(application, cfg, logger, metrics),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       20 * time.Second,
 		WriteTimeout:      60 * time.Second,
@@ -59,22 +76,22 @@ func main() {
 		errCh <- srv.ListenAndServe()
 	}()
 
-	sigCh := make(chan os.Signal, 2)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
 	select {
-	case sig := <-sigCh:
-		logger.Info("shutdown signal received", "signal", sig.String())
+	case <-ctx.Done():
+		logger.Info("shutdown signal received")
 	case err := <-errCh:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("server stopped", "error", err)
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
+	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("graceful shutdown failed", "error", err)
+	}
+	if err := shutdownTracing(shutdownCtx); err != nil {
+		logger.Error("tracing shutdown failed", "error", err)
 	}
 
 	logger.Info("shutdown complete")

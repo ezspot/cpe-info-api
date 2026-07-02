@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -92,22 +93,6 @@ const (
 		"if [ -d \"$d\" ]; then case \":$LD_LIBRARY_PATH:\" in *\":$d:\"*) ;; *) LD_LIBRARY_PATH=\"${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$d\";; esac; fi; done; export LD_LIBRARY_PATH"
 )
 
-var zyxelCommandsWithSFP = []commandSpec{
-	{key: "sys_atsh", cmd: "sys atsh"},
-	{key: "uptime", cmd: "uptime"},
-	{key: "ifconfig", cmd: "ifconfig"},
-	{key: "lanhosts", cmd: "cfg lanhosts get"},
-	{key: "portmap", cmd: "if cfg lanhosts get >/dev/null 2>&1; then dmesg -c > /dev/null 2>&1; ethswctl -c arldump > /dev/null 2>&1; for line in $(cfg lanhosts get | grep Ethernet | awk '{print $4}' | sed 's/\\://g'); do dmesg | grep \"$line\" | awk '{print $3 \" \" $4}'; done; fi"},
-	{key: "arp", cmd: "arp -a | grep br0"},
-	{key: "leases", cmd: "cat /var/dnsmasq/dnsmasq.leases"},
-	{key: "ethctl", cmd: "cfg ethctl get"},
-	{key: "wifi24", cmd: "zywlctl -b 2 assoclist"},
-	{key: "wifi50", cmd: "zywlctl -b 5 assoclist"},
-	{key: "wlan", cmd: "cfg wlan get"},
-	{key: "loadavg", cmd: "cat /proc/loadavg"},
-	{key: "sfp", cmd: "zycli sfp show"},
-}
-
 var zyxelCommandsNoSFP = []commandSpec{
 	{key: "sys_atsh", cmd: "sys atsh"},
 	{key: "uptime", cmd: "uptime"},
@@ -122,6 +107,10 @@ var zyxelCommandsNoSFP = []commandSpec{
 	{key: "wlan", cmd: "cfg wlan get"},
 	{key: "loadavg", cmd: "cat /proc/loadavg"},
 }
+
+var zyxelCommandsWithSFP = slices.Concat(zyxelCommandsNoSFP, []commandSpec{
+	{key: "sfp", cmd: "zycli sfp show"},
+})
 
 var vantivaCommands = []commandSpec{
 	{key: "system_info", cmd: "ubus call system info"},
@@ -171,6 +160,9 @@ func (c *Collector) IsAllowedTarget(ipStr string) bool {
 }
 
 func (c *Collector) PerformAction(ctx context.Context, ip string, port int, options ActionOptions) ActionResponse {
+	ctx, cancel := context.WithTimeout(ctx, c.cfg.RequestTimeout)
+	defer cancel()
+
 	response := ActionResponse{
 		IP:        ip,
 		Port:      port,
@@ -270,6 +262,23 @@ func (c *Collector) PerformAction(ctx context.Context, ip string, port int, opti
 }
 
 func (c *Collector) Collect(ctx context.Context, ip string, port int, options CollectOptions) CollectResponse {
+	response := c.collect(ctx, ip, port, options)
+	c.metrics.ObserveCollectorRequest(options.Model, collectResult(response))
+	return response
+}
+
+func collectResult(response CollectResponse) string {
+	switch {
+	case response.SSHFailed:
+		return "ssh_failed"
+	case len(response.Errors) > 0:
+		return "partial_success"
+	default:
+		return "success"
+	}
+}
+
+func (c *Collector) collect(ctx context.Context, ip string, port int, options CollectOptions) CollectResponse {
 	ctx, cancel := context.WithTimeout(ctx, c.cfg.RequestTimeout)
 	defer cancel()
 
@@ -511,7 +520,7 @@ func buildActionCommand(def actionDefinition, params map[string]string) (string,
 		if value == "" {
 			return "", fmt.Errorf("missing required action param %q", key)
 		}
-		if !isActionParamSafe(value) {
+		if !IsActionTokenSafe(value) {
 			return "", fmt.Errorf("invalid action param %q", key)
 		}
 		parts = append(parts, value)
@@ -519,10 +528,11 @@ func buildActionCommand(def actionDefinition, params map[string]string) (string,
 	return strings.Join(parts, " "), nil
 }
 
-var actionParamPattern = regexp.MustCompile(`^[A-Za-z0-9._:=/-]+$`)
+var actionTokenPattern = regexp.MustCompile(`^[A-Za-z0-9._:=/-]+$`)
 
-func isActionParamSafe(value string) bool {
-	return actionParamPattern.MatchString(value)
+// IsActionTokenSafe reports whether an action name or param is shell-safe.
+func IsActionTokenSafe(value string) bool {
+	return actionTokenPattern.MatchString(strings.TrimSpace(value))
 }
 
 func (c *Collector) sshDial(ctx context.Context, ip string, port int, model string) (*ssh.Client, error) {
@@ -673,7 +683,7 @@ func (c *Collector) resolveKeyPath(model string) (string, error) {
 		return c.cfg.SSHKeyPath, nil
 	}
 
-	if !isModelSafe(model) {
+	if !IsModelSafe(model) {
 		return "", fmt.Errorf("invalid model format")
 	}
 
@@ -731,7 +741,8 @@ func (c *Collector) loadSigner(keyPath string) (ssh.Signer, error) {
 
 var modelPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
-func isModelSafe(model string) bool {
+// IsModelSafe reports whether a model identifier is path- and shell-safe.
+func IsModelSafe(model string) bool {
 	return modelPattern.MatchString(model)
 }
 
@@ -823,6 +834,14 @@ func commandProfileForModel(model string) commandProfile {
 	}
 }
 
+func DefaultPortForModel(model string) int {
+	upper := strings.ToUpper(strings.TrimSpace(model))
+	if isVantivaModel(upper) {
+		return 60022
+	}
+	return 22
+}
+
 func isExitStatus127(err error) bool {
 	return strings.Contains(err.Error(), "status 127")
 }
@@ -868,11 +887,6 @@ func (c *Collector) openInteractiveShell(ctx context.Context, client *ssh.Client
 		return nil, err
 	}
 
-	modes := ssh.TerminalModes{
-		ssh.ECHO:          0,
-		ssh.TTY_OP_ISPEED: 115200,
-		ssh.TTY_OP_OSPEED: 115200,
-	}
 	term, rows, cols, modes := terminalProfile(model)
 	if err := session.RequestPty(term, rows, cols, modes); err != nil {
 		_ = session.Close()
@@ -907,7 +921,7 @@ func (c *Collector) openInteractiveShell(ctx context.Context, client *ssh.Client
 	}
 	_, _ = io.WriteString(s.stdin, "\n")
 
-	readyCtx, cancel := context.WithTimeout(ctx, minDuration(8*time.Second, c.cfg.SSHCommandTimeout))
+	readyCtx, cancel := context.WithTimeout(ctx, min(8*time.Second, c.cfg.SSHCommandTimeout))
 	defer cancel()
 	banner, err := s.readUntilPrompt(readyCtx)
 	if err != nil {
@@ -1069,13 +1083,6 @@ func trimEmptyHead(lines []string) []string {
 		lines = lines[1:]
 	}
 	return lines
-}
-
-func minDuration(a, b time.Duration) time.Duration {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 func errorsIsTimeout(err error) bool {
