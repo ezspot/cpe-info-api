@@ -471,7 +471,7 @@ paths:
         name: port
         schema:
           type: integer
-      - description: Model (VANTIVA/FMG/P2812/VMG/AX/EX)
+      - description: Model (VANTIVA/F1X/EWA/FMG/P2812/VMG/AX/EX)
         in: query
         name: model
         schema:
@@ -558,7 +558,7 @@ paths:
         name: port
         schema:
           type: integer
-      - description: Model (VANTIVA/FMG/P2812/VMG/AX/EX)
+      - description: Model (VANTIVA/F1X/EWA/FMG/P2812/VMG/AX/EX)
         in: query
         name: model
         schema:

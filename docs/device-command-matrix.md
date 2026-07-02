@@ -4,13 +4,14 @@ This matrix is the source of truth for model command profiles in this service.
 
 - Evidence policy: only commands confirmed from provided payloads/logs are listed as `confirmed`.
 - Unknown policy: commands not present in payloads are marked `not confirmed`.
-- Last updated: 2026-03-05.
+- Last updated: 2026-07-02.
 
 ## Profiles in code
 
 - `zyxel-v1`: VMG8825, EX5401, EX5601, FMG, P2812, and generic ZyXEL fallback.
 - `zyxel-ax-v1`: AX7501 (same as ZyXEL profile but without `zycli sfp show`).
-- `vantiva-openwrt-v1`: VANTIVA FGA2235TCS (OpenWRT ubus/uci poll commands).
+- `vantiva-openwrt-v1`: VANTIVA FGA2235TCS (F01) and EWA1331 (F1X) (OpenWRT ubus/uci poll commands).
+  Matched model prefixes: `VANTIVA*`, `F01*`, `F1X*`, `EWA*`.
 
 ## ZyXEL VMG8825 / EX5401 / EX5601 (confirmed)
 
@@ -75,6 +76,15 @@ Actions:
 - Semi-reset: `rtfd --soft`
 - Factory reset: `rtfd`
 - ACS task templates present: `SAM uptime`, `SAM F1 RemoteUser`
+
+## VANTIVA EWA1331 (F1X)
+
+Evidence from SAM `cpeAction` payload captured 2026-07-02:
+
+- Actions (confirmed, identical to FGA2235TCS): Reboot `reboot`, Semi-reset `rtfd --soft`, Factory reset `rtfd`.
+- SSH CLI auth (confirmed): F1-family CLI user + password + shared F1 private key, same as F01.
+- Poll/info commands over SSH: `not confirmed` — SAM polls this model via TR-069/CHC ACS (payload had empty `CliCommands`). The service assumes the FGA2235TCS ubus/uci command set until SSH poll output is captured.
+- ACS task templates present: `SAM uptime`, `SAM F1 RemoteUser` (tr069 method; returns a remote-assist login URL on port 60443). TR-069/ACS is out of scope for this SSH-based service.
 
 ## FMG3542 / EMG2812AC command set status
 

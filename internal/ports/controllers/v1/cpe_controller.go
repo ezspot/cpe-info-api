@@ -50,7 +50,7 @@ type actionRequest struct {
 // @Security BearerAuth
 // @Param ip query string false "Target CPE IP (GET)"
 // @Param port query int false "Target SSH port (GET; defaults per model)"
-// @Param model query string false "Model (VANTIVA/FMG/P2812/VMG/AX/EX)"
+// @Param model query string false "Model (VANTIVA/F1X/EWA/FMG/P2812/VMG/AX/EX)"
 // @Param raw query bool false "Include raw command output"
 // @Param includePsk query bool false "Include cleartext PSK values"
 // @Param payload body collectRequest false "Target CPE data (POST)"

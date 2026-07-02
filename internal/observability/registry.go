@@ -123,7 +123,10 @@ func NormalizeModelLabel(model string) string {
 	switch {
 	case upper == "":
 		return "unspecified"
-	case upper == "VANTIVA", strings.HasPrefix(upper, "F01"), strings.HasPrefix(upper, "F1X"):
+	case strings.HasPrefix(upper, "VANTIVA"),
+		strings.HasPrefix(upper, "F01"),
+		strings.HasPrefix(upper, "F1X"),
+		strings.HasPrefix(upper, "EWA"):
 		return "vantiva"
 	case strings.Contains(upper, "P2812"), strings.Contains(upper, "EMG"):
 		return "p2812"

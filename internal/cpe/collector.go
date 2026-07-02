@@ -754,9 +754,14 @@ func fileExists(path string) bool {
 	return !info.IsDir()
 }
 
+// Vantiva family: FGA2235TCS (F01) and EWA1331 (F1X) share the F1 CLI
+// credentials, key, and action set.
 func isVantivaModel(model string) bool {
 	upper := strings.ToUpper(strings.TrimSpace(model))
-	return upper == "VANTIVA" || strings.HasPrefix(upper, "F01") || strings.HasPrefix(upper, "F1X")
+	return strings.HasPrefix(upper, "VANTIVA") ||
+		strings.HasPrefix(upper, "F01") ||
+		strings.HasPrefix(upper, "F1X") ||
+		strings.HasPrefix(upper, "EWA")
 }
 
 func isZyxelP2812Model(model string) bool {
