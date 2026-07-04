@@ -10,8 +10,8 @@ This matrix is the source of truth for model command profiles in this service.
 
 - `zyxel-v1`: VMG8825, EX5401, EX5601, FMG, P2812, and generic ZyXEL fallback.
 - `zyxel-ax-v1`: AX7501 (same as ZyXEL profile but without `zycli sfp show`).
-- `vantiva-openwrt-v1`: VANTIVA FGA2235TCS (F01) and EWA1331 (F1X) (OpenWRT ubus/uci poll commands).
-  Matched model prefixes: `VANTIVA*`, `F01*`, `F1X*`, `EWA*`.
+- `vantiva-openwrt-v1`: VANTIVA FGA2235TCS (FO1) and EWA1331 (F1X) (OpenWRT ubus/uci poll commands).
+  Matched model prefixes: `VANTIVA*`, `FO1*`, `F1X*`, `EWA*`.
 
 ## ZyXEL VMG8825 / EX5401 / EX5601 (confirmed)
 
@@ -82,7 +82,7 @@ Actions:
 Evidence from SAM `cpeAction` payload captured 2026-07-02:
 
 - Actions (confirmed, identical to FGA2235TCS): Reboot `reboot`, Semi-reset `rtfd --soft`, Factory reset `rtfd`.
-- SSH CLI auth (confirmed): F1-family CLI user + password + shared F1 private key, same as F01.
+- SSH CLI auth (confirmed): F1-family CLI user + password + shared F1 private key, same as FO1.
 - Poll/info commands over SSH: `not confirmed` — SAM polls this model via TR-069/CHC ACS (payload had empty `CliCommands`). The service assumes the FGA2235TCS ubus/uci command set until SSH poll output is captured.
 - ACS task templates present: `SAM uptime`, `SAM F1 RemoteUser` (tr069 method; returns a remote-assist login URL on port 60443). TR-069/ACS is out of scope for this SSH-based service.
 

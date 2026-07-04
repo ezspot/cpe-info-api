@@ -433,7 +433,7 @@ func TestHandleAction(t *testing.T) {
 		{
 			name:           "success",
 			method:         http.MethodPost,
-			body:           `{"ip":"10.0.0.1","model":"F01","action":"reboot","dryRun":true}`,
+			body:           `{"ip":"10.0.0.1","model":"FO1","action":"reboot","dryRun":true}`,
 			allowed:        true,
 			actionResponse: cpe.ActionResponse{Success: true, Profile: "vantiva-openwrt-v1", Command: "reboot", DryRun: true},
 			wantStatus:     http.StatusOK,

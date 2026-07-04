@@ -17,7 +17,7 @@ Operational:
 
 CPE (SSH):
 
-- `GET /v1/cpe/collect?ip=192.168.1.1&port=22&model=F01&raw=1&includePsk=0`
+- `GET /v1/cpe/collect?ip=192.168.1.1&port=22&model=FO1&raw=1&includePsk=0`
 - `POST /v1/cpe/collect` (JSON body)
 - `POST /v1/cpe/actions` (JSON body)
 
@@ -30,7 +30,7 @@ Switch (SNMP):
 `POST /v1/cpe/collect`:
 
 ```json
-{ "ip": "192.168.1.1", "port": 22, "model": "F01" }
+{ "ip": "192.168.1.1", "port": 22, "model": "FO1" }
 ```
 
 `POST /v1/cpe/actions`:
@@ -47,7 +47,7 @@ Switch (SNMP):
 
 ## Model-based SSH behavior
 
-- `VANTIVA` family (`F01`, `F1X`, `EWA`):
+- `VANTIVA` family (`FO1`, `F1X`, `EWA`):
   - key: `cpe-ssh-keys/VANTIVA_TAFJORD`
   - user: `VANTIVA_CPE_CLI_USER`
   - password: `VANTIVA_CPE_CLI_PASSWORD`
@@ -64,7 +64,7 @@ Switch (SNMP):
 
 ## Model command profiles
 
-- `model=F01`, `model=F1X`, `model=EWA*`, and `model=VANTIVA` use the OpenWRT poll profile (`ubus`/`uci`) and parse `ubus call system info` into `cpeInfo`/`uptime` when possible.
+- `model=FO1`, `model=F1X`, `model=EWA*`, and `model=VANTIVA` use the OpenWRT poll profile (`ubus`/`uci`) and parse `ubus call system info` into `cpeInfo`/`uptime` when possible.
 - `model=AX7501` and `model=AX*` use the ZyXEL poll profile without `zycli sfp show`.
 - `model=VMG8825`, `VMG*`, `EX5401`, `EX5601`, `EX*`, `EMG-P2812`, `EMG*`, and `FMG*` use the ZyXEL poll profile with SFP command.
 - Unknown model values use the ZyXEL-compatible default profile.
@@ -73,7 +73,7 @@ Switch (SNMP):
 ## CPE actions
 
 - Supported actions are exposed through `POST /v1/cpe/actions`.
-- VANTIVA OpenWRT family (`F01`, `F1X`, `EWA`, `VANTIVA`) supports:
+- VANTIVA OpenWRT family (`FO1`, `F1X`, `EWA`, `VANTIVA`) supports:
   - `reboot`
   - `semi_reset`
   - `factory_reset`
@@ -128,7 +128,7 @@ CPE (SSH):
 - `CPE_SSH_KEY_PASSPHRASE` (optional)
 - `CPE_SSH_KEYS_DIR` (default `cpe-ssh-keys`, required for model-based key lookup)
 - `CPE_SSH_MODEL_KEY_MAP` (optional format: `MODEL=FILENAME,MODEL2=FILENAME2`)
-- `VANTIVA_CPE_CLI_USER` / `VANTIVA_CPE_CLI_PASSWORD` (required for VANTIVA models `F01`, `F1X`, `EWA`, `VANTIVA`)
+- `VANTIVA_CPE_CLI_USER` / `VANTIVA_CPE_CLI_PASSWORD` (required for VANTIVA models `FO1`, `F1X`, `EWA`, `VANTIVA`)
 - `CPE_SSH_KNOWN_HOSTS` (required unless insecure host key is enabled)
 - `CPE_SSH_INSECURE_HOSTKEY` (default `false`, not recommended)
 

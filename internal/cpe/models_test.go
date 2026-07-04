@@ -9,7 +9,7 @@ func TestCommandProfileForModel(t *testing.T) {
 	}{
 		{"VANTIVA", "vantiva-openwrt-v1"},
 		{"VANTIVA_F1X", "vantiva-openwrt-v1"},
-		{"F01", "vantiva-openwrt-v1"},
+		{"FO1", "vantiva-openwrt-v1"},
 		{"F1X", "vantiva-openwrt-v1"},
 		{"EWA1331", "vantiva-openwrt-v1"},
 		{"ewa1331", "vantiva-openwrt-v1"},
@@ -36,7 +36,7 @@ func TestDefaultPortForModel(t *testing.T) {
 	}{
 		{"VANTIVA", 60022},
 		{"VANTIVA_F1X", 60022},
-		{"F01", 60022},
+		{"FO1", 60022},
 		{"EWA1331", 60022},
 		{"EX5401", 22},
 		{"", 22},

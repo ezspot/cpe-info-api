@@ -177,7 +177,7 @@ func NormalizeModelLabel(model string) string {
 	case upper == "":
 		return "unspecified"
 	case strings.HasPrefix(upper, "VANTIVA"),
-		strings.HasPrefix(upper, "F01"),
+		strings.HasPrefix(upper, "FO1"),
 		strings.HasPrefix(upper, "F1X"),
 		strings.HasPrefix(upper, "EWA"):
 		return "vantiva"
