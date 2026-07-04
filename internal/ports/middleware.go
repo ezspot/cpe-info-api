@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"cpe-api/internal/observability"
-	"cpe-api/internal/tcerr"
+	"device-api/internal/observability"
+	"device-api/internal/tcerr"
 
 	"github.com/gin-gonic/gin"
 )
@@ -139,15 +139,19 @@ func bearerAuth(apiKey string) gin.HandlerFunc {
 	}
 	key := []byte(apiKey)
 	return func(c *gin.Context) {
-		header := c.GetHeader("Authorization")
-		if !strings.HasPrefix(header, "Bearer ") {
-			_ = c.Error(tcerr.NewUnauthorized("missing bearer token"))
+		header := strings.TrimSpace(c.GetHeader("Authorization"))
+		if header == "" {
+			_ = c.Error(tcerr.NewUnauthorized("missing authorization token"))
 			c.Abort()
 			return
 		}
-		token := strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
+		// Accept both "Bearer <key>" and the raw key (matches the apikey scheme).
+		token := header
+		if len(token) >= 7 && strings.EqualFold(token[:7], "Bearer ") {
+			token = strings.TrimSpace(token[7:])
+		}
 		if subtle.ConstantTimeCompare([]byte(token), key) != 1 {
-			_ = c.Error(tcerr.NewUnauthorized("invalid bearer token"))
+			_ = c.Error(tcerr.NewUnauthorized("invalid authorization token"))
 			c.Abort()
 			return
 		}

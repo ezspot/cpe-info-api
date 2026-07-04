@@ -1,6 +1,8 @@
 package config
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -11,6 +13,45 @@ import (
 	"time"
 )
 
+// LoadDotEnv loads KEY=VALUE lines from path into the process environment without
+// overriding variables already set (so real env / container config wins). A
+// missing file is not an error, so production can rely purely on real env vars.
+func LoadDotEnv(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimPrefix(line, "export ")
+		key, val, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		if _, exists := os.LookupEnv(key); exists {
+			continue
+		}
+		val = strings.Trim(strings.TrimSpace(val), `"'`)
+		if err := os.Setenv(key, val); err != nil {
+			return err
+		}
+	}
+	return scanner.Err()
+}
+
 type Config struct {
 	Addr     string
 	LogLevel slog.Level
@@ -19,6 +60,11 @@ type Config struct {
 
 	AllowedTargetCIDRs []*net.IPNet
 	Concurrency        int
+
+	ReadHeaderTimeout time.Duration
+	ReadTimeout       time.Duration
+	WriteTimeout      time.Duration
+	IdleTimeout       time.Duration
 
 	RequestTimeout    time.Duration
 	SSHDialTimeout    time.Duration
@@ -34,6 +80,31 @@ type Config struct {
 	VantivaCLIPassword string
 	SSHKnownHostsPath  string
 	SSHInsecureHostKey bool
+
+	SNMP            SNMPConfig
+	SwitchHostsFile string
+}
+
+type SNMPConfig struct {
+	Port               int
+	Version            string
+	Community          string
+	V3User             string
+	V3Level            string
+	V3AuthProtocol     string
+	V3AuthPassphrase   string
+	V3PrivProtocol     string
+	V3PrivPassphrase   string
+	Timeout            time.Duration
+	RequestTimeout     time.Duration
+	Retries            int
+	MaxRepetitions     uint32
+	AllowedTargetCIDRs []*net.IPNet
+}
+
+// Configured reports whether SNMP polling credentials are present.
+func (s SNMPConfig) Configured() bool {
+	return s.Community != "" || s.V3User != ""
 }
 
 func MustLoad() Config {
@@ -52,6 +123,11 @@ func Load() (Config, error) {
 		APIKey: envStr("CPE_API_KEY", ""),
 
 		Concurrency: envInt("CPE_CONCURRENCY", 16),
+
+		ReadHeaderTimeout: envDur("HTTP_READ_HEADER_TIMEOUT", 5*time.Second),
+		ReadTimeout:       envDur("HTTP_READ_TIMEOUT", 20*time.Second),
+		WriteTimeout:      envDur("HTTP_WRITE_TIMEOUT", 60*time.Second),
+		IdleTimeout:       envDur("HTTP_IDLE_TIMEOUT", 60*time.Second),
 
 		RequestTimeout:    envDur("CPE_REQUEST_TIMEOUT", 45*time.Second),
 		SSHDialTimeout:    envDur("CPE_SSH_DIAL_TIMEOUT", 6*time.Second),
@@ -94,7 +170,82 @@ func Load() (Config, error) {
 	if !cfg.SSHInsecureHostKey && cfg.SSHKnownHostsPath == "" {
 		return Config{}, fmt.Errorf("set CPE_SSH_KNOWN_HOSTS or CPE_SSH_INSECURE_HOSTKEY=true")
 	}
+
+	if cfg.WriteTimeout <= 0 {
+		return Config{}, fmt.Errorf("HTTP_WRITE_TIMEOUT must be > 0")
+	}
+	// The CPE collect/action poll runs synchronously before the response is
+	// written, so its budget must fit inside the server write deadline.
+	if cfg.RequestTimeout >= cfg.WriteTimeout {
+		return Config{}, fmt.Errorf("CPE_REQUEST_TIMEOUT (%s) must be less than HTTP_WRITE_TIMEOUT (%s)", cfg.RequestTimeout, cfg.WriteTimeout)
+	}
+
+	snmp, err := loadSNMP(cfg.AllowedTargetCIDRs, cfg.WriteTimeout)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.SNMP = snmp
+	cfg.SwitchHostsFile = envStr("SWITCH_HOSTS_FILE", "")
+
 	return cfg, nil
+}
+
+func loadSNMP(defaultCIDRs []*net.IPNet, writeTimeout time.Duration) (SNMPConfig, error) {
+	snmp := SNMPConfig{
+		Port:             envInt("SNMP_PORT", 161),
+		Version:          strings.ToLower(envStr("SNMP_VERSION", "2c")),
+		Community:        envStr("SNMP_COMMUNITY", ""),
+		V3User:           envStr("SNMP_V3_USER", ""),
+		V3Level:          strings.ToLower(envStr("SNMP_V3_LEVEL", "authPriv")),
+		V3AuthProtocol:   strings.ToUpper(envStr("SNMP_V3_AUTH_PROTOCOL", "SHA")),
+		V3AuthPassphrase: envStr("SNMP_V3_AUTH_PASS", ""),
+		V3PrivProtocol:   strings.ToUpper(envStr("SNMP_V3_PRIV_PROTOCOL", "AES")),
+		V3PrivPassphrase: envStr("SNMP_V3_PRIV_PASS", ""),
+		Timeout:          envDur("SNMP_TIMEOUT", 5*time.Second),
+		RequestTimeout:   envDur("SNMP_REQUEST_TIMEOUT", 30*time.Second),
+		Retries:          envInt("SNMP_RETRIES", 2),
+		MaxRepetitions:   uint32(envInt("SNMP_MAX_REPETITIONS", 20)),
+	}
+
+	allowedCSV := envStr("SNMP_ALLOWED_TARGET_CIDRS", "")
+	if allowedCSV == "" {
+		snmp.AllowedTargetCIDRs = defaultCIDRs
+	} else {
+		allowed, err := parseCIDRs(allowedCSV)
+		if err != nil {
+			return SNMPConfig{}, err
+		}
+		snmp.AllowedTargetCIDRs = allowed
+	}
+
+	if !snmp.Configured() {
+		return snmp, nil
+	}
+
+	switch snmp.Version {
+	case "2c", "3":
+	default:
+		return SNMPConfig{}, fmt.Errorf("SNMP_VERSION must be 2c or 3")
+	}
+	if snmp.Version == "2c" && snmp.Community == "" {
+		return SNMPConfig{}, fmt.Errorf("SNMP_COMMUNITY is required for SNMP_VERSION=2c")
+	}
+	if snmp.Version == "3" && snmp.V3User == "" {
+		return SNMPConfig{}, fmt.Errorf("SNMP_V3_USER is required for SNMP_VERSION=3")
+	}
+	if snmp.Port < 1 || snmp.Port > 65535 {
+		return SNMPConfig{}, fmt.Errorf("SNMP_PORT must be in range 1..65535")
+	}
+	if snmp.Timeout <= 0 || snmp.RequestTimeout <= 0 {
+		return SNMPConfig{}, fmt.Errorf("SNMP timeouts must be > 0")
+	}
+	// The poll runs synchronously before the HTTP response is written, so its
+	// overall budget must fit inside the server write deadline.
+	if snmp.RequestTimeout >= writeTimeout {
+		return SNMPConfig{}, fmt.Errorf("SNMP_REQUEST_TIMEOUT (%s) must be less than HTTP_WRITE_TIMEOUT (%s)", snmp.RequestTimeout, writeTimeout)
+	}
+
+	return snmp, nil
 }
 
 func parseCIDRs(csv string) ([]*net.IPNet, error) {

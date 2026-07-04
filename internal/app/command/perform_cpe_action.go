@@ -4,9 +4,9 @@ import (
 	"context"
 	"log/slog"
 
-	"cpe-api/internal/cpe"
-	"cpe-api/internal/decorator"
-	"cpe-api/internal/tcerr"
+	"device-api/internal/cpe"
+	"device-api/internal/decorator"
+	"device-api/internal/tcerr"
 
 	"go.opentelemetry.io/otel/trace"
 )

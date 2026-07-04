@@ -1,17 +1,18 @@
-// @title CPE Info API
+// @title Device API
 // @version 1.0
-// @description Collect CPE diagnostics over SSH with model-aware authentication.
+// @description Collect diagnostics from CPEs over SSH and from switches over SNMP.
 // @BasePath /
 // @schemes http https
 // @securityDefinitions.apikey BearerAuth
 // @in header
 // @name Authorization
-// @description Use `Bearer <token>`.
+// @description Paste the API key value directly (a `Bearer ` prefix is also accepted).
 package main
 
 import (
 	"context"
 	"errors"
+	"log"
 	"log/slog"
 	"net/http"
 	"os"
@@ -19,13 +20,18 @@ import (
 	"syscall"
 	"time"
 
-	"cpe-api/internal/config"
-	"cpe-api/internal/observability"
-	"cpe-api/internal/ports"
-	"cpe-api/internal/service"
+	"device-api/internal/config"
+	"device-api/internal/observability"
+	"device-api/internal/ports"
+	"device-api/internal/service"
+	"device-api/internal/snmp"
 )
 
 func main() {
+	if err := config.LoadDotEnv(".env"); err != nil {
+		log.Printf("warning: could not read .env: %v", err)
+	}
+
 	cfg := config.MustLoad()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
@@ -47,7 +53,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	shutdownTracing, err := observability.SetupTracing(ctx, "cpe-info-api")
+	shutdownTracing, err := observability.SetupTracing(ctx, "device-api")
 	if err != nil {
 		logger.Error("tracing init failed", "error", err)
 		os.Exit(1)
@@ -61,13 +67,22 @@ func main() {
 		os.Exit(1)
 	}
 
+	var hostResolver *snmp.HostResolver
+	if cfg.SwitchHostsFile != "" {
+		hostResolver, err = snmp.NewHostResolver(cfg.SwitchHostsFile)
+		if err != nil {
+			logger.Error("switch hosts file load failed", "error", err)
+			os.Exit(1)
+		}
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           ports.NewHttpServer(application, cfg, logger, metrics),
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       20 * time.Second,
-		WriteTimeout:      60 * time.Second,
-		IdleTimeout:       60 * time.Second,
+		Handler:           ports.NewHttpServer(application, cfg, logger, metrics, hostResolver),
+		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
+		ReadTimeout:       cfg.ReadTimeout,
+		WriteTimeout:      cfg.WriteTimeout,
+		IdleTimeout:       cfg.IdleTimeout,
 	}
 
 	errCh := make(chan error, 1)

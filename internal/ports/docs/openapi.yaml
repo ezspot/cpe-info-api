@@ -3,18 +3,23 @@ components:
     ActionRequest:
       properties:
         action:
+          example: reboot
           type: string
         dryRun:
+          example: true
           type: boolean
         ip:
+          example: 10.0.0.1
           type: string
         model:
+          example: F1X
           type: string
         params:
           additionalProperties:
             type: string
           type: object
         port:
+          example: 60022
           type: integer
       type: object
     ActionResponse:
@@ -168,6 +173,113 @@ components:
       properties:
         status:
           type: string
+      type: object
+    SwitchPortMAC:
+      properties:
+        mac:
+          type: string
+        vlan:
+          type: integer
+      type: object
+    SwitchPortOptics:
+      properties:
+        currentMa:
+          type: number
+        rxPowerDbm:
+          type: number
+        temperatureC:
+          type: number
+        txPowerDbm:
+          type: number
+        voltageV:
+          type: number
+      type: object
+    SwitchPortRequest:
+      properties:
+        host:
+          example: 10.160.25.72
+          type: string
+        includeMacs:
+          example: true
+          type: boolean
+        port:
+          example: 6/2
+          type: string
+        portGroup:
+          example: TAFAALLERSTADAR2S003P20
+          type: string
+        reverseDirection:
+          example: false
+          type: boolean
+      type: object
+    SwitchPortResponse:
+      properties:
+        errors:
+          items:
+            type: string
+          type: array
+          uniqueItems: false
+        host:
+          type: string
+        pollTime:
+          type: string
+        ports:
+          items:
+            $ref: '#/components/schemas/SwitchPortStatus'
+          type: array
+          uniqueItems: false
+        retryable:
+          type: boolean
+        snmpFailed:
+          type: boolean
+        snmpPort:
+          type: integer
+        switch:
+          type: string
+      type: object
+    SwitchPortStatus:
+      properties:
+        adminStatus:
+          type: string
+        description:
+          type: string
+        dsBytes:
+          type: integer
+        dsDataMB:
+          type: number
+        dsPacketErrors:
+          type: integer
+        duplex:
+          type: string
+        ifIndex:
+          type: integer
+        macs:
+          items:
+            $ref: '#/components/schemas/SwitchPortMAC'
+          type: array
+          uniqueItems: false
+        operStatus:
+          type: string
+        optics:
+          $ref: '#/components/schemas/SwitchPortOptics'
+        pollTime:
+          type: string
+        port:
+          type: string
+        speedMbps:
+          type: integer
+        statusDuration:
+          type: string
+        statusSeconds:
+          type: integer
+        switch:
+          type: string
+        usBytes:
+          type: integer
+        usDataMB:
+          type: number
+        usPacketErrors:
+          type: integer
       type: object
     cpe.ArpEntry:
       properties:
@@ -356,7 +468,7 @@ components:
       type: object
   securitySchemes:
     BearerAuth:
-      description: Use `Bearer <token>`.
+      description: Paste the API key value directly (a `Bearer ` prefix is also accepted).
       in: header
       name: Authorization
       type: apiKey
@@ -364,8 +476,8 @@ externalDocs:
   description: ""
   url: ""
 info:
-  description: Collect CPE diagnostics over SSH with model-aware authentication.
-  title: CPE Info API
+  description: Collect diagnostics from CPEs over SSH and from switches over SNMP.
+  title: Device API
   version: "1.0"
 openapi: 3.1.0
 paths:
@@ -458,15 +570,14 @@ paths:
       - CPE
   /v1/cpe/collect:
     get:
-      description: Supports GET query params and POST JSON body. Returns parsed diagnostics
-        collected over SSH.
+      description: Returns parsed diagnostics collected over SSH.
       parameters:
-      - description: Target CPE IP (GET)
+      - description: Target CPE IP
         in: query
         name: ip
         schema:
           type: string
-      - description: Target SSH port (GET; defaults per model)
+      - description: Target SSH port (defaults per model)
         in: query
         name: port
         schema:
@@ -486,16 +597,6 @@ paths:
         name: includePsk
         schema:
           type: boolean
-      requestBody:
-        content:
-          application/json:
-            schema:
-              oneOf:
-              - type: object
-              - $ref: '#/components/schemas/CollectRequest'
-                description: Target CPE data (POST)
-                summary: payload
-        description: Target CPE data (POST)
       responses:
         "200":
           content:
@@ -545,34 +646,8 @@ paths:
       tags:
       - CPE
     post:
-      description: Supports GET query params and POST JSON body. Returns parsed diagnostics
-        collected over SSH.
-      parameters:
-      - description: Target CPE IP (GET)
-        in: query
-        name: ip
-        schema:
-          type: string
-      - description: Target SSH port (GET; defaults per model)
-        in: query
-        name: port
-        schema:
-          type: integer
-      - description: Model (VANTIVA/F1X/EWA/FMG/P2812/VMG/AX/EX)
-        in: query
-        name: model
-        schema:
-          type: string
-      - description: Include raw command output
-        in: query
-        name: raw
-        schema:
-          type: boolean
-      - description: Include cleartext PSK values
-        in: query
-        name: includePsk
-        schema:
-          type: boolean
+      description: Same as GET but takes a JSON body. Returns parsed diagnostics collected
+        over SSH.
       requestBody:
         content:
           application/json:
@@ -580,9 +655,10 @@ paths:
               oneOf:
               - type: object
               - $ref: '#/components/schemas/CollectRequest'
-                description: Target CPE data (POST)
+                description: Target CPE data
                 summary: payload
-        description: Target CPE data (POST)
+        description: Target CPE data
+        required: true
       responses:
         "200":
           content:
@@ -628,8 +704,151 @@ paths:
           description: Bad Gateway
       security:
       - BearerAuth: []
-      summary: Collect CPE diagnostics
+      summary: Collect CPE diagnostics (JSON body)
       tags:
       - CPE
+  /v1/switch/ports:
+    get:
+      description: Polls a switch (Cisco Catalyst 4500/9400, Huawei S5736) over SNMP
+        for interface status, speed, duplex, error counters, byte counters, and transceiver
+        optics. Omit port to return all interfaces.
+      parameters:
+      - description: Switch management IP; ignored when portGroup is set
+        in: query
+        name: host
+        schema:
+          type: string
+      - description: Interface label, e.g. 6/2 or GigabitEthernet6/2; omit for all
+          ports
+        in: query
+        name: port
+        schema:
+          type: string
+      - description: RADIUS port-group id, e.g. TAFAALLERSTADAR3S003P20; resolves
+          host+interface
+        in: query
+        name: portGroup
+        schema:
+          type: string
+      - description: Include learned MAC addresses (defaults on when a single port
+          is requested)
+        in: query
+        name: macs
+        schema:
+          type: boolean
+      - description: Reverse Ds/Us direction mapping (for core-facing ports)
+        in: query
+        name: reverse
+        schema:
+          type: boolean
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SwitchPortResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not Found
+        "429":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Too Many Requests
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SwitchPortResponse'
+          description: Bad Gateway
+      security:
+      - BearerAuth: []
+      summary: Poll switch port status and optics over SNMP
+      tags:
+      - Switch
+    post:
+      description: Same as GET but takes a JSON body. Omit port to return all interfaces.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              oneOf:
+              - type: object
+              - $ref: '#/components/schemas/SwitchPortRequest'
+                description: Switch poll request
+                summary: payload
+        description: Switch poll request
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SwitchPortResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Not Found
+        "429":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          description: Too Many Requests
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SwitchPortResponse'
+          description: Bad Gateway
+      security:
+      - BearerAuth: []
+      summary: Poll switch port status and optics over SNMP (JSON body)
+      tags:
+      - Switch
 servers:
 - url: /

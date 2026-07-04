@@ -18,6 +18,9 @@ type Registry struct {
 	sshDialFailuresTotal   *prometheus.CounterVec
 	commandDuration        *prometheus.HistogramVec
 	concurrencyRejects     *prometheus.CounterVec
+	snmpRequestsTotal      *prometheus.CounterVec
+	snmpRequestDuration    *prometheus.HistogramVec
+	snmpFailuresTotal      *prometheus.CounterVec
 }
 
 func NewRegistry() *Registry {
@@ -26,49 +29,68 @@ func NewRegistry() *Registry {
 	r := &Registry{
 		registry: registry,
 		httpRequestsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "cpe_api",
+			Namespace: "device_api",
 			Subsystem: "http",
 			Name:      "requests_total",
 			Help:      "Total number of HTTP requests processed by route, method, and status.",
 		}, []string{"route", "method", "status"}),
 		httpRequestDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Namespace: "cpe_api",
+			Namespace: "device_api",
 			Subsystem: "http",
 			Name:      "request_duration_seconds",
 			Help:      "HTTP request duration by route and method.",
 			Buckets:   []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60},
 		}, []string{"route", "method"}),
 		httpInFlight: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: "cpe_api",
+			Namespace: "device_api",
 			Subsystem: "http",
 			Name:      "in_flight_requests",
 			Help:      "Current number of in-flight HTTP requests by route.",
 		}, []string{"route"}),
 		collectorRequestsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "cpe_api",
+			Namespace: "device_api",
 			Subsystem: "collector",
 			Name:      "requests_total",
 			Help:      "Total number of collector requests by normalized model and result.",
 		}, []string{"model", "result"}),
 		sshDialFailuresTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "cpe_api",
+			Namespace: "device_api",
 			Subsystem: "collector",
 			Name:      "ssh_dial_failures_total",
 			Help:      "Total number of SSH dial failures by normalized model and classified reason.",
 		}, []string{"model", "reason"}),
 		commandDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Namespace: "cpe_api",
+			Namespace: "device_api",
 			Subsystem: "collector",
 			Name:      "command_duration_seconds",
 			Help:      "Collector command duration by profile, command key, and result.",
 			Buckets:   []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30},
 		}, []string{"profile", "command", "result"}),
 		concurrencyRejects: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "cpe_api",
+			Namespace: "device_api",
 			Subsystem: "runtime",
 			Name:      "concurrency_rejections_total",
 			Help:      "Total number of requests rejected by concurrency control.",
 		}, []string{"limiter"}),
+		snmpRequestsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "device_api",
+			Subsystem: "snmp",
+			Name:      "requests_total",
+			Help:      "Total number of SNMP switch-port poll requests by result.",
+		}, []string{"result"}),
+		snmpRequestDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "device_api",
+			Subsystem: "snmp",
+			Name:      "request_duration_seconds",
+			Help:      "SNMP switch-port poll duration by result.",
+			Buckets:   []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30},
+		}, []string{"result"}),
+		snmpFailuresTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "device_api",
+			Subsystem: "snmp",
+			Name:      "failures_total",
+			Help:      "Total number of SNMP failures by classified reason.",
+		}, []string{"reason"}),
 	}
 
 	registry.MustRegister(
@@ -79,6 +101,9 @@ func NewRegistry() *Registry {
 		r.sshDialFailuresTotal,
 		r.commandDuration,
 		r.concurrencyRejects,
+		r.snmpRequestsTotal,
+		r.snmpRequestDuration,
+		r.snmpFailuresTotal,
 	)
 
 	return r
@@ -116,6 +141,34 @@ func (r *Registry) ObserveCommandDuration(profile, command, result string, durat
 
 func (r *Registry) ObserveConcurrencyReject(limiter string) {
 	r.concurrencyRejects.WithLabelValues(normalizeLimiter(limiter)).Inc()
+}
+
+func (r *Registry) ObserveSNMPRequest(result string, duration time.Duration) {
+	result = normalizeSNMPResult(result)
+	r.snmpRequestsTotal.WithLabelValues(result).Inc()
+	r.snmpRequestDuration.WithLabelValues(result).Observe(duration.Seconds())
+}
+
+func (r *Registry) ObserveSNMPFailure(reason string) {
+	r.snmpFailuresTotal.WithLabelValues(normalizeSNMPReason(reason)).Inc()
+}
+
+func normalizeSNMPResult(result string) string {
+	switch strings.TrimSpace(result) {
+	case "success", "snmp_failed", "not_found":
+		return result
+	default:
+		return "unknown"
+	}
+}
+
+func normalizeSNMPReason(reason string) string {
+	switch strings.TrimSpace(reason) {
+	case "timeout", "unreachable", "connection_refused", "auth_failed", "other":
+		return reason
+	default:
+		return "other"
+	}
 }
 
 func NormalizeModelLabel(model string) string {

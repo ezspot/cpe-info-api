@@ -3,12 +3,13 @@ package service
 import (
 	"log/slog"
 
-	"cpe-api/internal/app"
-	"cpe-api/internal/app/command"
-	"cpe-api/internal/app/query"
-	"cpe-api/internal/config"
-	"cpe-api/internal/cpe"
-	"cpe-api/internal/observability"
+	"device-api/internal/app"
+	"device-api/internal/app/command"
+	"device-api/internal/app/query"
+	"device-api/internal/config"
+	"device-api/internal/cpe"
+	"device-api/internal/observability"
+	"device-api/internal/snmp"
 
 	"go.opentelemetry.io/otel"
 )
@@ -19,14 +20,17 @@ func NewApplication(cfg config.Config, logger *slog.Logger, metrics *observabili
 		return nil, err
 	}
 
-	tracer := otel.Tracer("cpe-api")
+	snmpCollector := snmp.NewCollector(cfg.SNMP, logger, metrics)
+
+	tracer := otel.Tracer("device-api")
 
 	return &app.Application{
 		Commands: app.Commands{
 			PerformCpeAction: command.NewPerformCpeActionHandler(collector, logger, tracer),
 		},
 		Queries: app.Queries{
-			CollectCpeInfo: query.NewCollectCpeInfoHandler(collector, logger, tracer),
+			CollectCpeInfo:    query.NewCollectCpeInfoHandler(collector, logger, tracer),
+			CollectSwitchPort: query.NewCollectSwitchPortHandler(snmpCollector, logger, tracer),
 		},
 	}, nil
 }

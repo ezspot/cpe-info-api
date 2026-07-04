@@ -4,7 +4,7 @@ import (
 	"embed"
 	"net/http"
 
-	"cpe-api/internal/tcerr"
+	"device-api/internal/tcerr"
 
 	"github.com/gin-gonic/gin"
 )

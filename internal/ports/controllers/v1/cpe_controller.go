@@ -8,11 +8,11 @@ import (
 	"strconv"
 	"strings"
 
-	"cpe-api/internal/app"
-	"cpe-api/internal/app/command"
-	"cpe-api/internal/app/query"
-	"cpe-api/internal/cpe"
-	"cpe-api/internal/tcerr"
+	"device-api/internal/app"
+	"device-api/internal/app/command"
+	"device-api/internal/app/query"
+	"device-api/internal/cpe"
+	"device-api/internal/tcerr"
 
 	"github.com/gin-gonic/gin"
 )
@@ -33,27 +33,25 @@ type collectRequest struct {
 } // @Name CollectRequest
 
 type actionRequest struct {
-	IP     string            `json:"ip"`
-	Port   int               `json:"port,omitempty"`
-	Model  string            `json:"model,omitempty"`
-	Action string            `json:"action"`
+	IP     string            `json:"ip" example:"10.0.0.1"`
+	Port   int               `json:"port,omitempty" example:"60022"`
+	Model  string            `json:"model,omitempty" example:"F1X"`
+	Action string            `json:"action" example:"reboot"`
 	Params map[string]string `json:"params,omitempty"`
-	DryRun bool              `json:"dryRun,omitempty"`
+	DryRun bool              `json:"dryRun,omitempty" example:"true"`
 } // @Name ActionRequest
 
 // Collect is a gin handler function.
 // @Summary Collect CPE diagnostics
-// @Description Supports GET query params and POST JSON body. Returns parsed diagnostics collected over SSH.
+// @Description Returns parsed diagnostics collected over SSH.
 // @Tags CPE
-// @Accept json
 // @Produce json
 // @Security BearerAuth
-// @Param ip query string false "Target CPE IP (GET)"
-// @Param port query int false "Target SSH port (GET; defaults per model)"
+// @Param ip query string false "Target CPE IP"
+// @Param port query int false "Target SSH port (defaults per model)"
 // @Param model query string false "Model (VANTIVA/F1X/EWA/FMG/P2812/VMG/AX/EX)"
 // @Param raw query bool false "Include raw command output"
 // @Param includePsk query bool false "Include cleartext PSK values"
-// @Param payload body collectRequest false "Target CPE data (POST)"
 // @Success 200 {object} cpe.CollectResponse
 // @Failure 400 {object} tcerr.ErrorEnvelope
 // @Failure 401 {object} tcerr.ErrorEnvelope
@@ -62,8 +60,31 @@ type actionRequest struct {
 // @Failure 429 {object} tcerr.ErrorEnvelope
 // @Failure 502 {object} cpe.CollectResponse
 // @Router /v1/cpe/collect [get]
-// @Router /v1/cpe/collect [post]
 func (controller *CpeController) Collect(c *gin.Context) {
+	controller.collect(c)
+}
+
+// CollectPost is a gin handler function.
+// @Summary Collect CPE diagnostics (JSON body)
+// @Description Same as GET but takes a JSON body. Returns parsed diagnostics collected over SSH.
+// @Tags CPE
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param payload body collectRequest true "Target CPE data"
+// @Success 200 {object} cpe.CollectResponse
+// @Failure 400 {object} tcerr.ErrorEnvelope
+// @Failure 401 {object} tcerr.ErrorEnvelope
+// @Failure 403 {object} tcerr.ErrorEnvelope
+// @Failure 413 {object} tcerr.ErrorEnvelope
+// @Failure 429 {object} tcerr.ErrorEnvelope
+// @Failure 502 {object} cpe.CollectResponse
+// @Router /v1/cpe/collect [post]
+func (controller *CpeController) CollectPost(c *gin.Context) {
+	controller.collect(c)
+}
+
+func (controller *CpeController) collect(c *gin.Context) {
 	var req collectRequest
 	if c.Request.Method == http.MethodGet {
 		req.IP = c.Query("ip")

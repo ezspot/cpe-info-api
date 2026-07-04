@@ -4,11 +4,12 @@ import (
 	"log/slog"
 	"net/http"
 
-	"cpe-api/internal/app"
-	"cpe-api/internal/config"
-	"cpe-api/internal/observability"
-	v1 "cpe-api/internal/ports/controllers/v1"
-	"cpe-api/internal/tcerr"
+	"device-api/internal/app"
+	"device-api/internal/config"
+	"device-api/internal/observability"
+	v1 "device-api/internal/ports/controllers/v1"
+	"device-api/internal/snmp"
+	"device-api/internal/tcerr"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/binding"
@@ -16,9 +17,9 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 )
 
-const serviceName = "cpe-info-api"
+const serviceName = "device-api"
 
-func NewHttpServer(application *app.Application, cfg config.Config, logger *slog.Logger, metrics *observability.Registry) http.Handler {
+func NewHttpServer(application *app.Application, cfg config.Config, logger *slog.Logger, metrics *observability.Registry, hostResolver *snmp.HostResolver) http.Handler {
 	gin.SetMode(gin.ReleaseMode)
 	binding.EnableDecoderDisallowUnknownFields = true
 
@@ -48,6 +49,7 @@ func NewHttpServer(application *app.Application, cfg config.Config, logger *slog
 	router.GET("/metrics", gin.WrapH(promhttp.HandlerFor(metrics.PrometheusGatherer(), promhttp.HandlerOpts{})))
 
 	cpeController := v1.NewCpeController(application, logger)
+	switchController := v1.NewSwitchController(application, logger, hostResolver)
 
 	api := router.Group("/v1")
 	api.Use(
@@ -60,8 +62,12 @@ func NewHttpServer(application *app.Application, cfg config.Config, logger *slog
 	{
 		cpeRoutes := api.Group("/cpe")
 		cpeRoutes.GET("/collect", cpeController.Collect)
-		cpeRoutes.POST("/collect", cpeController.Collect)
+		cpeRoutes.POST("/collect", cpeController.CollectPost)
 		cpeRoutes.POST("/actions", cpeController.PerformAction)
+
+		switchRoutes := api.Group("/switch")
+		switchRoutes.GET("/ports", switchController.GetPorts)
+		switchRoutes.POST("/ports", switchController.PostPorts)
 	}
 
 	return router

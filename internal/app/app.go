@@ -1,8 +1,8 @@
 package app
 
 import (
-	"cpe-api/internal/app/command"
-	"cpe-api/internal/app/query"
+	"device-api/internal/app/command"
+	"device-api/internal/app/query"
 )
 
 type Application struct {
@@ -15,5 +15,6 @@ type Commands struct {
 }
 
 type Queries struct {
-	CollectCpeInfo query.CollectCpeInfoHandler
+	CollectCpeInfo    query.CollectCpeInfoHandler
+	CollectSwitchPort query.CollectSwitchPortHandler
 }

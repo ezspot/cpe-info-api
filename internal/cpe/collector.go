@@ -17,8 +17,8 @@ import (
 	"sync"
 	"time"
 
-	"cpe-api/internal/config"
-	"cpe-api/internal/observability"
+	"device-api/internal/config"
+	"device-api/internal/observability"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"

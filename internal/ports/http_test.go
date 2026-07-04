@@ -13,13 +13,13 @@ import (
 	"testing"
 	"time"
 
-	"cpe-api/internal/app"
-	"cpe-api/internal/app/command"
-	"cpe-api/internal/app/query"
-	"cpe-api/internal/config"
-	"cpe-api/internal/cpe"
-	"cpe-api/internal/observability"
-	"cpe-api/internal/tcerr"
+	"device-api/internal/app"
+	"device-api/internal/app/command"
+	"device-api/internal/app/query"
+	"device-api/internal/config"
+	"device-api/internal/cpe"
+	"device-api/internal/observability"
+	"device-api/internal/tcerr"
 
 	"go.opentelemetry.io/otel"
 )
@@ -102,7 +102,7 @@ func newTestServer(t *testing.T, cfg config.Config, model *stubModel, metrics *o
 			CollectCpeInfo: query.NewCollectCpeInfoHandler(model, logger, tracer),
 		},
 	}
-	return NewHttpServer(application, cfg, logger, metrics)
+	return NewHttpServer(application, cfg, logger, metrics, nil)
 }
 
 func decodeErrorEnvelope(t *testing.T, body *bytes.Buffer) tcerr.ErrorEnvelope {
@@ -147,7 +147,7 @@ func TestHandleCollectErrorContract(t *testing.T) {
 			allowed:        true,
 			wantStatus:     http.StatusUnauthorized,
 			wantCode:       "unauthorized",
-			wantMessageSub: "missing bearer token",
+			wantMessageSub: "missing authorization token",
 		},
 		{
 			name:           "forbidden target",
@@ -259,6 +259,29 @@ func TestHandleCollectErrorContract(t *testing.T) {
 	}
 }
 
+func TestAuthAcceptsRawAndBearerToken(t *testing.T) {
+	cfg := newTestConfig() // APIKey = secret-token
+	handler := newTestServer(t, cfg, &stubModel{allowed: true}, observability.NewRegistry())
+
+	for _, auth := range []string{"secret-token", "Bearer secret-token", "bearer secret-token"} {
+		req := httptest.NewRequest(http.MethodGet, "/v1/cpe/collect?ip=10.0.0.1", nil)
+		req.Header.Set("Authorization", auth)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code == http.StatusUnauthorized {
+			t.Fatalf("auth header %q was rejected, want accepted", auth)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/cpe/collect?ip=10.0.0.1", nil)
+	req.Header.Set("Authorization", "wrong-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong token: status %d, want 401", rec.Code)
+	}
+}
+
 func TestConcurrencyLimitRejects(t *testing.T) {
 	cfg := newTestConfig()
 	cfg.APIKey = ""
@@ -320,8 +343,8 @@ func TestMetricsEndpointExposesHTTPMetrics(t *testing.T) {
 
 	body := metricsRec.Body.String()
 	for _, fragment := range []string{
-		"cpe_api_http_requests_total",
-		"cpe_api_http_request_duration_seconds",
+		"device_api_http_requests_total",
+		"device_api_http_request_duration_seconds",
 		`route="/v1/cpe/collect"`,
 	} {
 		if !strings.Contains(body, fragment) {
